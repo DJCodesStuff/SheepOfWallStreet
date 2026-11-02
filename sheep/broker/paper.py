@@ -132,14 +132,14 @@ class PaperBroker:
             q * self.bars(s)["close"].iloc[-1] for s, q in self.positions().items()
         )
 
-    def snapshot(self) -> None:
-        """Record today's (latest final session's) cash and equity."""
+    def snapshot(self, now: datetime | None = None) -> None:
+        """Record the latest final session's cash and equity."""
         self.conn.execute(
             """INSERT INTO equity_snapshots (profile_id, date, cash, equity)
                VALUES (%s, %s, %s, %s)
                ON CONFLICT (profile_id, date)
                DO UPDATE SET cash = excluded.cash, equity = excluded.equity""",
-            (self.profile_id, last_final_close(datetime.now(NY)).date(),
+            (self.profile_id, last_final_close(now or datetime.now(NY)).date(),
              self.cash(), self.equity()),
         )
 

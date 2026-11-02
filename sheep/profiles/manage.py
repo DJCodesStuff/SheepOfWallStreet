@@ -30,7 +30,7 @@ def reset(conn: psycopg.Connection, name: str) -> None:
         "DELETE FROM trade_tags WHERE trade_id IN (SELECT id FROM trades WHERE profile_id = %s)",
         (pid,),
     )
-    for table in ("trades", "orders", "equity_snapshots"):
+    for table in ("orders", "trades", "equity_snapshots"):  # orders reference trades
         conn.execute(f"DELETE FROM {table} WHERE profile_id = %s", (pid,))
 
 

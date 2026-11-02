@@ -34,24 +34,6 @@ CREATE TABLE IF NOT EXISTS profiles (
     config_json      JSONB NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS orders (
-    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    profile_id BIGINT NOT NULL REFERENCES profiles(id),
-    symbol     TEXT NOT NULL,
-    side       TEXT NOT NULL CHECK (side IN ('buy', 'sell')),
-    qty        DOUBLE PRECISION NOT NULL CHECK (qty > 0),
-    type       TEXT NOT NULL CHECK (type IN ('market', 'limit', 'stop')),
-    limit_price DOUBLE PRECISION,
-    stop_price DOUBLE PRECISION,
-    oco_group  TEXT,  -- when one order in a group fills, the others are cancelled
-    status     TEXT NOT NULL DEFAULT 'pending'
-               CHECK (status IN ('pending', 'filled', 'cancelled', 'rejected')),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    filled_at  TIMESTAMPTZ,
-    fill_price DOUBLE PRECISION,
-    fees       DOUBLE PRECISION NOT NULL DEFAULT 0
-);
-
 -- stop, target, rule_version and reasoning are required: every trade must carry them.
 CREATE TABLE IF NOT EXISTS trades (
     id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -66,7 +48,28 @@ CREATE TABLE IF NOT EXISTS trades (
     target         DOUBLE PRECISION NOT NULL,
     pnl            DOUBLE PRECISION,
     rule_version   TEXT NOT NULL REFERENCES rule_versions(version),
-    reasoning_json JSONB NOT NULL
+    reasoning_json JSONB NOT NULL,
+    exit_reason    TEXT
+);
+
+CREATE TABLE IF NOT EXISTS orders (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    profile_id BIGINT NOT NULL REFERENCES profiles(id),
+    symbol     TEXT NOT NULL,
+    side       TEXT NOT NULL CHECK (side IN ('buy', 'sell')),
+    qty        DOUBLE PRECISION NOT NULL CHECK (qty > 0),
+    type       TEXT NOT NULL CHECK (type IN ('market', 'limit', 'stop')),
+    limit_price DOUBLE PRECISION,
+    stop_price DOUBLE PRECISION,
+    oco_group  TEXT,  -- when one order in a group fills, the others are cancelled
+    trade_id   BIGINT REFERENCES trades(id),
+    intent_json JSONB,  -- entry orders: stop, target, rule version, reasoning
+    status     TEXT NOT NULL DEFAULT 'pending'
+               CHECK (status IN ('pending', 'filled', 'cancelled', 'rejected')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    filled_at  TIMESTAMPTZ,
+    fill_price DOUBLE PRECISION,
+    fees       DOUBLE PRECISION NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS trade_tags (
