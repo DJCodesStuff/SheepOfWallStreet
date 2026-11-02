@@ -17,5 +17,16 @@ uv run --env-file .env pytest                     # DB tests run in a rolled-bac
 
 Tip: `export UV_ENV_FILE=.env` to drop the `--env-file` flag.
 
+## Daily use
+
+```sh
+uv run --env-file .env python -m sheep.trader.run          # after 16:30 NY: fills, exits, new entries
+uv run --env-file .env streamlit run streamlit_app.py      # read-only dashboard
+uv run --env-file .env python -m sheep.backtest.engine main_paper   # walk-forward vs SPY
+```
+
+The dashboard deploys to Streamlit Community Cloud as-is: main file `streamlit_app.py`, and
+`DATABASE_URL = "postgresql://..."` in the app's Secrets.
+
 Profiles live in `config/profiles.yaml`, rule versions in `config/strategy.yaml`. Rule versions are
 immutable once synced; add a new version to change params.
