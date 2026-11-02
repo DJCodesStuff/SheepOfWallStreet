@@ -41,6 +41,9 @@ CREATE TABLE IF NOT EXISTS orders (
     side       TEXT NOT NULL CHECK (side IN ('buy', 'sell')),
     qty        DOUBLE PRECISION NOT NULL CHECK (qty > 0),
     type       TEXT NOT NULL CHECK (type IN ('market', 'limit', 'stop')),
+    limit_price DOUBLE PRECISION,
+    stop_price DOUBLE PRECISION,
+    oco_group  TEXT,  -- when one order in a group fills, the others are cancelled
     status     TEXT NOT NULL DEFAULT 'pending'
                CHECK (status IN ('pending', 'filled', 'cancelled', 'rejected')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
