@@ -1,0 +1,23 @@
+# Rule versions are immutable once written to the DB. To change params, add a new version.
+versions:
+  v1:
+    trend_ma_days: 200
+    momentum_lookback_days: 126   # ~6 months
+    top_n: 2
+    rsi_period: 14
+    rsi_entry_below: 40           # pullback entry
+    breakout_lookback_days: 20    # breakout entry
+    atr_period: 14
+    atr_stop_mult: 2.0
+    target_r_multiple: 2.0
+
+  v2_candidate:
+    trend_ma_days: 200
+    momentum_lookback_days: 63    # ~3 months
+    top_n: 1
+    rsi_period: 14
+    rsi_entry_below: 40
+    breakout_lookback_days: 20
+    atr_period: 14
+    atr_stop_mult: 2.5
+    target_r_multiple: 2.0

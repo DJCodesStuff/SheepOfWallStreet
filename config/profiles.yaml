@@ -1,0 +1,35 @@
+profiles:
+  - name: main_paper
+    mode: paper
+    broker: paper
+    starting_capital: 100
+    currency: USD
+    strategy_version: v1
+    watchlist: [SPY, QQQ, IWM, XLK, XLF, XLE, XLV]
+    risk:
+      risk_per_trade_pct: 1.0
+      max_open_positions: 3
+      weekly_loss_limit_pct: 3.0
+
+  - name: experiment_momentum_fast
+    mode: paper
+    broker: paper
+    starting_capital: 100
+    strategy_version: v2_candidate
+    watchlist: [SPY, QQQ]
+    risk:
+      risk_per_trade_pct: 1.0
+      max_open_positions: 2
+      weekly_loss_limit_pct: 3.0
+
+  # Live profiles also need ALLOW_LIVE=1 in the environment and human order confirmation.
+  - name: live_small
+    mode: live
+    broker: alpaca_live
+    starting_capital: 100
+    strategy_version: v1
+    watchlist: [SPY, QQQ]
+    risk:
+      risk_per_trade_pct: 1.0
+      max_open_positions: 2
+      weekly_loss_limit_pct: 3.0
