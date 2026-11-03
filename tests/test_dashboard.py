@@ -31,16 +31,17 @@ def test_every_page_renders_for_every_profile(monkeypatch):
     assert not at.exception
     for name in at.sidebar.selectbox[0].options:
         at.sidebar.selectbox[0].select(name).run()
-        for page in ("overview", "journal", "backtest", "manage"):
+        for page in ("overview", "journal", "rules", "backtest", "manage"):
             at.switch_page(f"{PAGES}{page}.py").run()
             assert not at.exception, (name, page)
 
 
 def test_controls_locked_by_default(monkeypatch):
     at = app(monkeypatch)
-    for page in ("backtest", "manage"):
+    for page in ("rules", "backtest", "manage"):
         at.switch_page(f"{PAGES}{page}.py").run()
         assert any("Unlock controls" in i.value for i in at.info), page
+        assert "Save version" not in labels(at)
         assert not any(label.startswith(("Run Trader", "Run backtest")) for label in labels(at))
 
 
@@ -58,6 +59,9 @@ def test_right_password_unlocks_controls(monkeypatch):
     assert any(label.startswith("Run Trader") for label in labels(at))
     at.switch_page(f"{PAGES}backtest.py").run()
     assert "Run backtest" in labels(at)
+    at.switch_page(f"{PAGES}rules.py").run()
+    assert not at.exception
+    assert {"Save version", "Switch"} <= set(labels(at))
 
 
 def test_pages_render_with_trades(monkeypatch):

@@ -21,6 +21,7 @@ pages = "sheep/dashboard/pages/"
 nav = st.navigation([
     st.Page(pages + "overview.py", title="Overview", icon=":material/dashboard:", default=True),
     st.Page(pages + "journal.py", title="Trade journal", icon=":material/receipt_long:"),
+    st.Page(pages + "rules.py", title="Rules", icon=":material/rule:"),
     st.Page(pages + "backtest.py", title="Backtest", icon=":material/query_stats:"),
     st.Page(pages + "manage.py", title="Manage", icon=":material/tune:"),
 ], position="top")

@@ -89,6 +89,36 @@ HELP = {
 }
 
 
+# Rule settings: (short label, what it does).
+PARAMS = {
+    "trend_ma_days": ("Trend filter (days)",
+                      "Only buy when price is above its N-day average; 200 is the long-term "
+                      "trend. A close below it also exits open trades."),
+    "momentum_lookback_days": ("Momentum lookback (days)",
+                               "The watchlist is ranked by return over this many trading days "
+                               "(63 ≈ 3 months, 126 ≈ 6 months)."),
+    "top_n": ("Top N by momentum", "Only the N strongest tickers can be entered."),
+    "rsi_period": ("RSI period (days)",
+                   "Days used for RSI, a 0-100 gauge of recent up moves versus down moves."),
+    "rsi_entry_below": ("Pullback entry: RSI below",
+                        "Buy a dip when RSI falls below this while in an uptrend. 0 turns "
+                        "pullback entries off."),
+    "breakout_lookback_days": ("Breakout lookback (days)",
+                               "Buy when the close beats the highest high of the previous N "
+                               "days."),
+    "atr_period": ("ATR period (days)",
+                   "Days used for ATR, the average daily price range (volatility)."),
+    "atr_stop_mult": ("Stop distance (× ATR)",
+                      "Stop sits this many ATRs below entry, and the trailing stop follows "
+                      "this far below the close. Wider means fewer stop-outs but smaller "
+                      "positions, since risk per trade is fixed."),
+    "target_r_multiple": ("Target (× risk)",
+                          "Take-profit this many times the risk above entry. 2 = twice as far "
+                          "up as the stop is down. Very large values effectively turn the "
+                          "target off and let the trailing stop exit."),
+}
+
+
 def num(key: str, label: str | None = None, fmt: str = "$%.2f"):
     return st.column_config.NumberColumn(label, format=fmt, help=HELP[key])
 
@@ -135,7 +165,8 @@ def load(profile: str | None = None) -> dict[str, pd.DataFrame]:
         out = {
             "profiles": q("SELECT id, name, mode, broker, strategy_version, starting_capital, "
                           "config_json FROM profiles ORDER BY id"),
-            "versions": q("SELECT version, params_json FROM rule_versions ORDER BY id"),
+            "versions": q("SELECT version, params_json, created_at, approved_by, notes "
+                          "FROM rule_versions ORDER BY id"),
         }
         if profile is not None:
             pid = int(out["profiles"].set_index("name").loc[profile, "id"])

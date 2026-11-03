@@ -1,4 +1,5 @@
-"""Profile management: show, reset (paper only), clone (always into a paper profile).
+"""Profile and rule-version management: show, reset (paper only), clone (always into a
+paper profile), create rule versions, switch a paper profile's rule version.
 
     python -m sheep.profiles.manage show main_paper
     python -m sheep.profiles.manage clone main_paper trial --version v2_candidate
@@ -13,6 +14,7 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from sheep.common.config import NAME_RE
+from sheep.trader.strategy import validate_rules
 
 
 def _profile(conn: psycopg.Connection, name: str) -> dict:
@@ -55,6 +57,38 @@ def clone(
                (name, mode, broker, starting_capital, currency, strategy_version, config_json)
            VALUES (%s, 'paper', 'paper', %s, %s, %s, %s)""",
         (new_name, p["starting_capital"], p["currency"], version, Jsonb(cfg)),
+    )
+
+
+def create_rule_version(
+    conn: psycopg.Connection, version: str, params: dict, notes: str | None = None,
+    approved_by: str = "dashboard",
+) -> None:
+    """Save a new, immutable rule version. Existing versions are never edited."""
+    if not NAME_RE.fullmatch(version):
+        raise ValueError("version name must be 1-64 letters, digits, _ or -")
+    validate_rules(params)
+    if conn.execute("SELECT 1 FROM rule_versions WHERE version = %s", (version,)).fetchone():
+        raise ValueError(f"rule version {version} already exists; versions can't be changed")
+    conn.execute(
+        "INSERT INTO rule_versions (version, params_json, approved_by, notes) "
+        "VALUES (%s, %s, %s, %s)",
+        (version, Jsonb(params), approved_by, notes),
+    )
+
+
+def set_rule_version(conn: psycopg.Connection, name: str, version: str) -> None:
+    """Switch a paper profile to another rule version. Live profiles change only in config."""
+    p = _profile(conn, name)
+    if p["mode"] != "paper":
+        raise ValueError(f"{name} is live; change its rules in config/profiles.yaml")
+    if not conn.execute("SELECT 1 FROM rule_versions WHERE version = %s", (version,)).fetchone():
+        raise ValueError(f"unknown rule version: {version}")
+    conn.execute(
+        "UPDATE profiles SET strategy_version = %s, "
+        "config_json = config_json || jsonb_build_object('strategy_version', %s::text) "
+        "WHERE id = %s",
+        (version, version, p["id"]),
     )
 
 

@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS rule_versions (
     version     TEXT NOT NULL UNIQUE,
     params_json JSONB NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    approved_by TEXT
+    approved_by TEXT,
+    notes       TEXT
 );
 
 CREATE TABLE IF NOT EXISTS profiles (

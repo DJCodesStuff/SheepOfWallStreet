@@ -27,6 +27,37 @@ class Rules:
     target_r_multiple: float
 
 
+# Allowed range per setting. Int bounds mean the setting must be a whole number.
+RULE_BOUNDS: dict[str, tuple[float, float]] = {
+    "trend_ma_days": (10, 400),
+    "momentum_lookback_days": (5, 400),
+    "top_n": (1, 20),
+    "rsi_period": (2, 50),
+    "rsi_entry_below": (0.0, 100.0),
+    "breakout_lookback_days": (2, 250),
+    "atr_period": (2, 100),
+    "atr_stop_mult": (0.5, 10.0),
+    "target_r_multiple": (0.5, 100.0),
+}
+
+
+def validate_rules(params: dict) -> Rules:
+    """Rules from untrusted params: exactly the known keys, numbers, within RULE_BOUNDS."""
+    try:
+        r = Rules(**params)
+    except TypeError as e:
+        raise ValueError(f"rule settings must be exactly {sorted(RULE_BOUNDS)} ({e})") from e
+    for k, (lo, hi) in RULE_BOUNDS.items():
+        v = getattr(r, k)
+        if isinstance(v, bool) or not isinstance(v, int | float):
+            raise ValueError(f"{k} must be a number")
+        if isinstance(lo, int) and not isinstance(v, int):
+            raise ValueError(f"{k} must be a whole number")
+        if not lo <= v <= hi:
+            raise ValueError(f"{k} must be between {lo} and {hi}")
+    return r
+
+
 @dataclass(frozen=True)
 class Candidate:
     symbol: str

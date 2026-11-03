@@ -75,3 +75,25 @@ def test_leader_without_setup_blocks_others():
 def test_trail_stop_only_ratchets_up():
     assert trail_stop(95, close=110, atr_value=2, mult=2) == 106
     assert trail_stop(106, close=100, atr_value=2, mult=2) == 106
+
+
+@pytest.mark.parametrize("change", [
+    {"top_n": 0},  # below range
+    {"atr_stop_mult": 50},  # above range
+    {"trend_ma_days": 200.5},  # must be whole
+    {"rsi_period": "14"},  # must be a number
+    {"extra": 1},  # unknown key
+])
+def test_validate_rules_rejects(change):
+    from sheep.trader.strategy import validate_rules
+
+    params = load_strategies()["v1"] | change
+    with pytest.raises(ValueError):
+        validate_rules(params)
+
+
+def test_validate_rules_accepts_config_versions():
+    from sheep.trader.strategy import validate_rules
+
+    for params in load_strategies().values():
+        validate_rules(params)

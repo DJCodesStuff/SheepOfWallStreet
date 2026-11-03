@@ -105,3 +105,22 @@ def test_reset_and_clone(make, db):
     c = db.execute("SELECT * FROM profiles WHERE name = 'live_copy'").fetchone()
     assert (c["mode"], c["broker"], c["strategy_version"]) == ("paper", "paper", "v2_candidate")
     assert c["config_json"]["mode"] == "paper"
+
+
+def test_create_and_switch_rule_versions(make, db):
+    from sheep.profiles.manage import create_rule_version, set_rule_version
+
+    params = load_strategies()["v1"] | {"atr_stop_mult": 3.0}
+    create_rule_version(db, "v1_wide", params, "wider stop")
+    row = db.execute("SELECT * FROM rule_versions WHERE version = 'v1_wide'").fetchone()
+    assert row["params_json"]["atr_stop_mult"] == 3.0 and row["notes"] == "wider stop"
+    with pytest.raises(ValueError, match="already exists"):
+        create_rule_version(db, "v1_wide", params)
+
+    set_rule_version(db, "main_paper", "v1_wide")
+    p = db.execute("SELECT * FROM profiles WHERE name = 'main_paper'").fetchone()
+    assert p["strategy_version"] == p["config_json"]["strategy_version"] == "v1_wide"
+    with pytest.raises(ValueError, match="live"):
+        set_rule_version(db, "live_small", "v1_wide")
+    with pytest.raises(ValueError, match="unknown"):
+        set_rule_version(db, "main_paper", "nope")
