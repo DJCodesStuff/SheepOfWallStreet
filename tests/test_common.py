@@ -88,3 +88,29 @@ def test_watchlist_instruments(tmp_path, watchlist, mode, ok):
     else:
         with pytest.raises(ConfigError):
             load_profiles(path, strategies={"v1": {}})
+
+
+def test_connect_retries_while_database_wakes(monkeypatch):
+    from sheep.common import db
+
+    calls = []
+
+    def flaky(*a, **kw):
+        calls.append(kw["connect_timeout"])
+        if len(calls) < 3:
+            raise psycopg.OperationalError("compute is starting")
+        return "conn"
+
+    monkeypatch.setattr(db.psycopg, "connect", flaky)
+    monkeypatch.setattr(db.time, "sleep", lambda s: None)
+    assert db.connect("postgresql://x") == "conn" and len(calls) == 3
+
+    def down(*a, **kw):
+        calls.append(1)
+        raise psycopg.OperationalError("down")
+
+    calls.clear()
+    monkeypatch.setattr(db.psycopg, "connect", down)
+    with pytest.raises(psycopg.OperationalError):
+        db.connect("postgresql://x")
+    assert len(calls) == 3  # gives up after three tries

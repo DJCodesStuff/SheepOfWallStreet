@@ -262,6 +262,7 @@ if __name__ == "__main__":
 
     from sheep.common.db import connect
 
+    failed = []
     with connect() as conn:
         names = sys.argv[1:] or [r["name"] for r in conn.execute(
             "SELECT name FROM profiles WHERE broker = 'paper' ORDER BY id"
@@ -273,3 +274,5 @@ if __name__ == "__main__":
                 print(f"[{name}]", *lines or ["no action"], sep="\n  ")
             except Exception as e:  # noqa: BLE001 - report and keep going
                 print(f"[{name}] FAILED: {e}")
+                failed.append(name)
+    sys.exit(1 if failed else 0)  # non-zero so the scheduler flags the run

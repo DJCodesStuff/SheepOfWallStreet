@@ -25,6 +25,11 @@ uv run --env-file .env streamlit run streamlit_app.py      # read-only dashboard
 uv run --env-file .env python -m sheep.backtest.engine main_paper   # walk-forward vs SPY
 ```
 
+The Trader runs itself on weekdays at 22:15 UTC through GitHub Actions
+(`.github/workflows/trader.yml`); add `DATABASE_URL` under the repo's Settings → Secrets and
+variables → Actions. You can also start it by hand from the Actions tab ("Run workflow"). A run
+where any profile fails is marked failed, and GitHub emails you.
+
 The dashboard deploys to Streamlit Community Cloud as-is: main file `streamlit_app.py`, and
 `DATABASE_URL = "postgresql://..."` in the app's Secrets.
 

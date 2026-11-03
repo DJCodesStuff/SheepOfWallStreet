@@ -6,6 +6,7 @@ Connection comes from the DATABASE_URL env var (kept in the gitignored .env, nev
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import asdict
 
 import psycopg
@@ -108,7 +109,16 @@ def connect(url: str | None = None) -> psycopg.Connection:
     url = url or os.environ.get("DATABASE_URL")
     if not url:
         raise RuntimeError("DATABASE_URL not set; put it in .env and use `uv run --env-file .env`")
-    return psycopg.connect(url, row_factory=dict_row)
+    # Neon's free tier suspends the database after 5 idle minutes; the first connection wakes it
+    # and can time out, so retry a couple of times before giving up.
+    for attempt in range(3):
+        try:
+            return psycopg.connect(url, row_factory=dict_row, connect_timeout=15)
+        except psycopg.OperationalError:
+            if attempt == 2:
+                raise
+            time.sleep(2 * (attempt + 1))
+    raise AssertionError("unreachable")
 
 
 # Sync functions never commit: the caller owns the transaction, so a failed sync changes nothing.
