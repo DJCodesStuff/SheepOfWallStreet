@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,6 +13,8 @@ CONFIG_DIR = ROOT / "config"
 
 # Which brokers each mode may use. A paper profile can never point at a live broker.
 BROKERS_BY_MODE = {"paper": {"paper", "alpaca_paper"}, "live": {"alpaca_live"}}
+SYMBOL_RE = re.compile(r"[A-Z0-9.^=-]{1,15}")
+NAME_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 
 class ConfigError(ValueError):
@@ -50,14 +53,14 @@ def load_profiles(
     strategies = load_strategies() if strategies is None else strategies
     profiles: dict[str, Profile] = {}
     for raw in (yaml.safe_load(Path(path).read_text()) or {}).get("profiles") or []:
-        p = _parse_profile(raw, strategies)
+        p = parse_profile(raw, strategies)
         if p.name in profiles:
             raise ConfigError(f"duplicate profile name: {p.name}")
         profiles[p.name] = p
     return profiles
 
 
-def _parse_profile(raw: dict, strategies: dict[str, dict]) -> Profile:
+def parse_profile(raw: dict, strategies: dict[str, dict]) -> Profile:
     name = raw.get("name") or "<unnamed>"
     try:
         p = Profile(
@@ -81,7 +84,10 @@ def _parse_profile(raw: dict, strategies: dict[str, dict]) -> Profile:
     check(p.broker in BROKERS_BY_MODE[p.mode], f"broker {p.broker!r} not allowed in {p.mode} mode")
     check(p.starting_capital > 0, "starting_capital must be > 0")
     check(p.strategy_version in strategies, f"unknown strategy_version {p.strategy_version!r}")
+    check(bool(NAME_RE.fullmatch(p.name)), "name must be 1-64 letters, digits, _ or -")
     check(len(p.watchlist) > 0, "watchlist is empty")
+    bad = [s for s in p.watchlist if not SYMBOL_RE.fullmatch(s)]
+    check(not bad, f"bad symbols: {bad}")
     check(0 < p.risk.risk_per_trade_pct <= 100, "risk_per_trade_pct must be in (0, 100]")
     check(0 < p.risk.weekly_loss_limit_pct <= 100, "weekly_loss_limit_pct must be in (0, 100]")
     check(p.risk.max_open_positions >= 1, "max_open_positions must be >= 1")

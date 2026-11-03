@@ -29,6 +29,8 @@ def test_repo_config_loads():
     {"strategy_version": "nope"},
     {"starting_capital": 0},
     {"watchlist": []},
+    {"watchlist": ["../etc"]},
+    {"name": "has space"},
     {"risk": {"risk_per_trade_pct": 1}},  # missing risk fields
 ])
 def test_bad_profiles_rejected(tmp_path, overrides):

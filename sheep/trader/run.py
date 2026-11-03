@@ -46,6 +46,8 @@ def run_profile(
     p = conn.execute("SELECT * FROM profiles WHERE name = %s", (name,)).fetchone()
     if p is None:
         raise ValueError(f"unknown profile: {name}")
+    # One run per profile at a time (cron + dashboard button): held until the transaction ends.
+    conn.execute("SELECT pg_advisory_xact_lock(%s)", (p["id"],))
     cfg = p["config_json"]
     risk = Risk(**cfg["risk"])
     params = conn.execute(

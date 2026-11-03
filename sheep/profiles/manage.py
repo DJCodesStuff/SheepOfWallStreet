@@ -12,6 +12,8 @@ from __future__ import annotations
 import psycopg
 from psycopg.types.json import Jsonb
 
+from sheep.common.config import NAME_RE
+
 
 def _profile(conn: psycopg.Connection, name: str) -> dict:
     row = conn.execute("SELECT * FROM profiles WHERE name = %s", (name,)).fetchone()
@@ -41,6 +43,8 @@ def clone(
 
     The clone lives only in the DB; add it to config/profiles.yaml to keep it in config too.
     """
+    if not NAME_RE.fullmatch(new_name):
+        raise ValueError("name must be 1-64 letters, digits, _ or -")
     p = _profile(conn, src)
     version = strategy_version or p["strategy_version"]
     cfg = p["config_json"] | {

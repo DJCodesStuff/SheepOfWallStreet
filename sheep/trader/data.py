@@ -5,7 +5,6 @@ Run `python -m sheep.trader.data` to warm the cache for every profile's watchlis
 
 from __future__ import annotations
 
-import re
 import warnings
 from datetime import datetime, time, timedelta
 from pathlib import Path
@@ -13,13 +12,12 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from sheep.common.config import ROOT
+from sheep.common.config import ROOT, SYMBOL_RE
 
 DATA_DIR = ROOT / "data"
 NY = ZoneInfo("America/New_York")
 BAR_FINAL_AT = time(16, 30)  # treat a daily bar as final 30 min after the 16:00 close
 COLUMNS = ["open", "high", "low", "close", "volume"]
-_SYMBOL_RE = re.compile(r"[A-Z0-9.^=-]{1,15}")
 
 
 def last_final_close(now: datetime) -> datetime:
@@ -60,7 +58,7 @@ def load_bars(
     every dividend/split, so appending would mix adjustment bases.
     """
     symbol = symbol.upper()
-    if not _SYMBOL_RE.fullmatch(symbol):
+    if not SYMBOL_RE.fullmatch(symbol):
         raise ValueError(f"bad symbol: {symbol!r}")
     now = now or datetime.now(NY)
     path = Path(cache_dir) / f"{symbol}.csv"
