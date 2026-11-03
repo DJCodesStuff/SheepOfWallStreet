@@ -106,3 +106,24 @@ def test_pages_render_with_trades(monkeypatch):
         assert len(at.dataframe) >= 1, page
     assert at.metric[0].value == "2"  # journal: 2 closed trades
     assert all(m.proto.help for m in at.metric)  # every metric has a hover explanation
+
+
+def test_options_page_renders_chain(monkeypatch):
+    import pandas as pd
+
+    from sheep.dashboard import core
+
+    def fake_chain(symbol, expiry):
+        rows = [dict(strike=k, lastPrice=1.0, bid=0.9, ask=1.1, volume=10, openInterest=100,
+                     impliedVolatility=0.2, inTheMoney=k < 500) for k in (400, 495, 505, 600)]
+        return pd.DataFrame(rows), pd.DataFrame(rows), 500.0
+
+    monkeypatch.setattr(core, "option_expiries", lambda s: ["2099-01-15"])
+    monkeypatch.setattr(core, "option_chain", fake_chain)
+    at = app(monkeypatch)
+    at.switch_page(f"{PAGES}options.py").run()
+    assert not at.exception
+    calls = at.dataframe[0].value
+    assert list(calls["strike"]) == [495, 505]  # ±10% window around $500 by default
+    at.text_input[0].input("^GSPC").run()
+    assert any("isn't a stock or ETF" in e.value for e in at.error)

@@ -3,6 +3,7 @@
 import hmac
 import os
 import time
+import warnings
 
 import pandas as pd
 import streamlit as st
@@ -41,7 +42,7 @@ HELP = {
     "exit_ts": "When the exit order filled.",
     "entry_price": "Fill price of the entry, including slippage.",
     "exit_price": "Fill price of the exit, including slippage.",
-    "qty": "Shares held. Fractional shares let a small account size positions precisely.",
+    "qty": "Shares held (fractional for stocks and ETFs) or whole contracts for futures.",
     "stop": "Stop-loss set at entry: entry price minus a multiple of ATR (average daily "
             "range). Defines the trade's risk.",
     "current_stop": "Trailing stop now in force. It only moves up as price rises, locking "
@@ -78,7 +79,33 @@ HELP = {
              "rule versions from identical starting conditions.",
     "new_profile": "Start a separate paper account with its own money and settings.",
     "capital": "Fake money the profile starts with.",
-    "watchlist": "Tickers the Trader scans and ranks by momentum.",
+    "watchlist": "Tickers the Trader scans and ranks by momentum. Stocks and ETFs, plus listed "
+                 "futures such as MES=F in paper profiles (see config/instruments.yaml). "
+                 "Indexes like ^GSPC can't be traded; use an ETF or a future instead.",
+    "benchmark": "What the strategy is compared with, bought at the start and held. SPY "
+                 "includes dividends. An index such as ^GSPC is price-only (no dividends), so "
+                 "it's a slightly easier bar to beat.",
+    "options": "Read-only option chain from Yahoo (delayed). Options can't be traded or "
+               "backtested here: there is no free history of option prices.",
+    "underlying": "Stock or ETF whose options to show.",
+    "expiry": "Date the options expire. Further-out expiries cost more but lose value more "
+              "slowly.",
+    "strike_window": "Only show strikes within this distance of the current price.",
+    "calls": "Calls: the right to BUY 100 shares at the strike before expiry. They gain when "
+             "the price rises.",
+    "puts": "Puts: the right to SELL 100 shares at the strike before expiry. They gain when "
+            "the price falls.",
+    "strike": "Price at which the option lets you buy (call) or sell (put) the shares.",
+    "last_price": "Last traded price per share. One contract covers 100 shares, so a 1.50 "
+                  "option costs $150.",
+    "bid": "Highest price a buyer is offering right now.",
+    "ask": "Lowest price a seller is asking right now. A wide bid-ask gap means trading it "
+           "is expensive.",
+    "volume": "Contracts traded today.",
+    "open_interest": "Contracts currently open. Higher means easier to trade.",
+    "iv": "Implied volatility: the yearly price swing the option's price is betting on. "
+          "Higher IV makes options more expensive.",
+    "itm": "In the money. Call: strike below the current price. Put: strike above it.",
     "risk_per_trade": "Share of equity lost if a trade hits its stop. 1% of $100 is $1. "
                       "Position size is set from this.",
     "max_positions": "Most trades open at once.",
@@ -227,20 +254,41 @@ def show_flash() -> None:
 
 
 @st.cache_data(ttl=3600, show_spinner="Running walk-forward backtest…")
-def backtest(watchlist: tuple, risk: dict, capital: float, params: dict, slippage: float):
+def backtest(watchlist: tuple, risk: dict, capital: float, params: dict, slippage: float,
+             benchmark: str = "SPY"):
     costs = Costs(slippage)
     bars = {s: load_bars(s) for s in watchlist}
     res, folds = walk_forward(bars, {v: Rules(**p) for v, p in params.items()}, Risk(**risk),
                               capital, costs)
     end = res.equity.index[-1] + pd.Timedelta(days=1)
-    bench = buy_hold(load_bars("SPY"), capital, costs, res.equity.index[0], end)
+    bench = buy_hold(load_bars(benchmark), capital, costs, res.equity.index[0], end)
     folds_df = pd.DataFrame([{
         "test from": f.test_start.date(), "test to": f.test_end.date(), "version": f.version,
         "trades": f.stats["n_trades"], "return": f.stats["total_return"],
         "max drawdown": f.stats["max_drawdown"],
     } for f in folds])
-    curve = pd.DataFrame({"Strategy": res.equity, "SPY buy-and-hold": bench}).ffill()
+    curve = pd.DataFrame({"Strategy": res.equity, f"{benchmark} buy-and-hold": bench}).ffill()
     return stats(res, bench), folds_df, curve
+
+
+@st.cache_data(ttl=300, show_spinner="Loading expiries…")
+def option_expiries(symbol: str) -> list[str]:
+    import yfinance as yf
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", module="yfinance")
+        return list(yf.Ticker(symbol).options)
+
+
+@st.cache_data(ttl=300, show_spinner="Loading option chain…")
+def option_chain(symbol: str, expiry: str) -> tuple[pd.DataFrame, pd.DataFrame, float | None]:
+    """(calls, puts, underlying price) for one expiry."""
+    import yfinance as yf
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", module="yfinance")
+        c = yf.Ticker(symbol).option_chain(expiry)
+    return c.calls, c.puts, (c.underlying or {}).get("regularMarketPrice")
 
 
 # --- password gate ----------------------------------------------------------------------------

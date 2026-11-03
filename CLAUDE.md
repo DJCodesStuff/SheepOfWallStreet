@@ -17,7 +17,11 @@ An open-source Python application for swing trading US stocks and ETFs on daily 
 ## Non-goals
 
 - Day trading or high-frequency trading
-- Leveraged products, options, forex (at this capital level)
+- Live trading of leveraged products, options, or forex. Futures are supported in **paper
+  profiles only**, modelled realistically (whole contracts, margin, multiplier, fees, rolls;
+  specs in `config/instruments.yaml`). Options are a **read-only chain viewer** in the
+  dashboard: no trading or backtesting (no free option price history). Indexes can't be traded;
+  they can be used as a backtest benchmark.
 - Auto-editing live rules without human approval
 - Deep learning price predictors (rarely hold up out of sample)
 

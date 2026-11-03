@@ -124,3 +124,21 @@ def test_create_and_switch_rule_versions(make, db):
         set_rule_version(db, "live_small", "v1_wide")
     with pytest.raises(ValueError, match="unknown"):
         set_rule_version(db, "main_paper", "nope")
+
+
+def test_futures_margin_whole_contracts_and_multiplier(db):
+    from sheep.common.config import Profile, Risk
+
+    sync_rule_versions(db, load_strategies())
+    risk = Risk(1.0, 3, 3.0)
+    sync_profiles(db, {"fut": Profile("fut", "paper", "paper", 3000.0, "v1", ("MES=F",), risk)})
+    b = PaperBroker(db, "fut", NO_COSTS, bars=lambda s: frame((100, 101, 99, 100),
+                                                              (100, 104, 99, 104)))
+    two = b.submit("MES=F", "buy", 2, at=FRI_EVENING)  # needs $5,000 margin, has $3,000
+    half = b.submit("MES=F", "buy", 0.5, at=FRI_EVENING)  # contracts are whole
+    one = b.submit("MES=F", "buy", 1, at=FRI_EVENING)
+    b.refresh()
+    assert [b.order(i)["status"] for i in (two, half, one)] == ["rejected", "rejected", "filled"]
+    assert b.cash() == pytest.approx(3000 - 0.85)  # only the fee leaves cash, not the notional
+    assert b.margin_in_use() == 2500
+    assert b.equity() == pytest.approx(3000 - 0.85 + (104 - 100) * 5)

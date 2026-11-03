@@ -71,3 +71,20 @@ def test_trade_requires_stop_and_reasoning(db):
             "VALUES ((SELECT min(id) FROM profiles), 'SPY', '2026-01-02', 500, 0.1, 520, "
             "'v1', '{}')"
         )
+
+
+@pytest.mark.parametrize("watchlist, mode, ok", [
+    (["MES=F"], "paper", True),
+    (["^GSPC"], "paper", False),  # indexes can't be traded
+    (["ZZZ=F"], "paper", False),  # no contract spec
+    (["EURUSD=X"], "paper", False),
+    (["MES=F"], "live", False),  # futures are paper-only
+])
+def test_watchlist_instruments(tmp_path, watchlist, mode, ok):
+    broker = "alpaca_live" if mode == "live" else "paper"
+    path = write_profiles(tmp_path, watchlist=watchlist, mode=mode, broker=broker)
+    if ok:
+        load_profiles(path, strategies={"v1": {}})
+    else:
+        with pytest.raises(ConfigError):
+            load_profiles(path, strategies={"v1": {}})

@@ -72,3 +72,24 @@ def test_trailing_stop_ratchets_open_trade(trader):
         "AND status = 'pending'", (t["id"],)
     ).fetchone()["stop_price"]
     assert stop > t["stop"]  # trades.stop keeps the stop at entry; the order trails
+
+
+def test_futures_daily_runs_match_backtest_through_roll(db):
+    from tests.test_backtest import mes_bars
+
+    sync_rule_versions(db, {"t": RULES.__dict__})
+    sync_profiles(db, {"f": Profile("f", "paper", "paper", 61_000.0, "t", ("MES=F",), RISK)})
+    df = mes_bars()["MES=F"]
+    logs = []
+    for d in df.index:
+        now = datetime.combine(d.date(), time(18), NY)
+        logs += run_profile(db, "f", NO_COSTS, bars_fn=lambda s, d=d: df.loc[:d], now=now)
+
+    (t,) = db.execute("SELECT * FROM trades").fetchall()
+    b = run({"MES=F": df}, RULES, RISK, 61_000.0, NO_COSTS).trades.iloc[0]
+    assert any("roll to next contract" in line for line in logs)
+    assert t["qty"] == b.qty == 24
+    assert t["exit_reason"] == "stop" and b.reason == "stop"
+    assert t["pnl"] == pytest.approx(b.pnl)
+    eq = db.execute("SELECT equity FROM equity_snapshots ORDER BY date DESC LIMIT 1").fetchone()
+    assert eq["equity"] == pytest.approx(61_000 + t["pnl"])

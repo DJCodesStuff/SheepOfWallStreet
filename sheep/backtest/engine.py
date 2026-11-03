@@ -13,10 +13,11 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from datetime import date
 
 import pandas as pd
 
-from sheep.common.config import Risk
+from sheep.common.config import Risk, instrument
 from sheep.trader.strategy import Rules, pick, signals, trail_stop
 
 
@@ -53,6 +54,8 @@ class _Pos:
     stop: float
     target: float
     reasoning: dict = field(repr=False)
+    costs: float = 0.0  # entry fee + roll costs so far
+    last_roll: date | None = None  # entry or latest roll date
 
 
 def run(
@@ -64,8 +67,14 @@ def run(
     start: pd.Timestamp | None = None,
     end: pd.Timestamp | None = None,
 ) -> Result:
-    """Trade days in [start, end). Bars before `start` are used only to warm up indicators."""
+    """Trade days in [start, end). Bars before `start` are used only to warm up indicators.
+
+    Futures (see config/instruments.yaml): whole contracts, sized within free margin, P&L times
+    the multiplier, no cash paid for the notional, and positions held over a roll date are
+    closed and reopened at the next open (paying slippage and fees twice).
+    """
     sigs = {s: signals(df, rules).join(df[["open", "high", "low"]]) for s, df in bars.items()}
+    inst = {s: instrument(s) for s in bars}
     days = sorted(set().union(*(sig.index for sig in sigs.values())))
     days = [d for d in days if (start is None or d >= start) and (end is None or d < end)]
 
@@ -77,19 +86,29 @@ def run(
     equity: dict[pd.Timestamp, float] = {}
     last_close: dict[str, float] = {}
     week, week_start_eq = None, capital
+    prev_day: pd.Timestamp | None = None
+
+    def fee(sym: str, qty: float) -> float:
+        return costs.fee_per_order + inst[sym].fee * qty
+
+    def value(p: _Pos, px: float) -> float:
+        """What the position adds to equity at price px (futures: open P&L only)."""
+        i = inst[p.symbol]
+        return p.qty * i.multiplier * (px - p.entry_price) if i.is_future else p.qty * px
 
     def close(sym: str, d: pd.Timestamp, px: float, reason: str) -> None:
         nonlocal cash
         p = positions.pop(sym)
-        fill = costs.sell(px)
-        cash += p.qty * fill - costs.fee_per_order
-        pnl = p.qty * (fill - p.entry_price) - 2 * costs.fee_per_order
+        mult = inst[sym].multiplier
+        fill, f = costs.sell(px), fee(sym, p.qty)
+        cash += value(p, fill) - f
+        pnl = p.qty * mult * (fill - p.entry_price) - p.costs - f
         trades.append({
             "symbol": sym, "setup": p.setup, "entry_date": p.entry_date, "exit_date": d,
             "entry_price": p.entry_price, "exit_price": fill, "qty": p.qty,
             "initial_stop": p.initial_stop, "stop": p.stop, "target": p.target, "pnl": pnl,
-            "r_multiple": pnl / (p.qty * (p.entry_price - p.initial_stop)), "reason": reason,
-            "reasoning": p.reasoning,
+            "r_multiple": pnl / (p.qty * mult * (p.entry_price - p.initial_stop)),
+            "reason": reason, "reasoning": p.reasoning,
         })
 
     for d in days:
@@ -97,26 +116,42 @@ def run(
         if (wk := d.isocalendar()[:2]) != week:
             week, week_start_eq = wk, prev_eq
 
-        # 1. at the open: queued exits, then queued entries
+        # 1. at the open: queued exits, futures rolls, then queued entries
         for s in [s for s in exits if s in today and s in positions]:
             close(s, d, today[s]["open"], "trend_break")
         exits &= positions.keys()
+        for s, p in positions.items():
+            i = inst[s]
+            if i.roll_months and s in today and prev_day is not None \
+                    and i.rolls_between(p.last_roll, prev_day.date()):
+                # ponytail: no margin re-check on the roll; the Trader closes the trade instead
+                px = today[s]["open"]
+                cost = p.qty * i.multiplier * (costs.buy(px) - costs.sell(px)) + 2 * fee(s, p.qty)
+                cash -= cost
+                p.costs += cost
+                p.last_roll = d.date()
         for c in entries:
             if c.symbol in positions or c.symbol not in today:
                 continue
             if len(positions) >= risk.max_open_positions:
                 break
+            i = inst[c.symbol]
             fill = costs.buy(today[c.symbol]["open"])
             if not c.stop < fill < c.target:  # gapped past a level: setup is void
                 continue
-            qty = prev_eq * risk.risk_per_trade_pct / 100 / (fill - c.stop)
-            qty = min(qty, (cash - costs.fee_per_order) / fill)
+            qty = prev_eq * risk.risk_per_trade_pct / 100 / ((fill - c.stop) * i.multiplier)
+            if i.is_future:
+                in_use = sum(q.qty * inst[s].margin for s, q in positions.items()
+                             if inst[s].is_future)
+                qty = math.floor(min(qty, (prev_eq - in_use) / i.margin))
+            else:
+                qty = min(qty, (cash - costs.fee_per_order) / fill)
             if qty <= 0:
                 continue
-            cash -= qty * fill + costs.fee_per_order
-            positions[c.symbol] = _Pos(
-                c.symbol, c.setup, d, fill, qty, c.stop, c.stop, c.target, c.reasoning
-            )
+            f = fee(c.symbol, qty)
+            cash -= f + (0 if i.is_future else qty * fill)
+            positions[c.symbol] = _Pos(c.symbol, c.setup, d, fill, qty, c.stop, c.stop,
+                                       c.target, c.reasoning, costs=f, last_roll=d.date())
 
         # 2. during the session: stops and targets
         for s, p in list(positions.items()):
@@ -140,9 +175,10 @@ def run(
                 if row["trend_break"]:
                     exits.add(s)
         last_close.update({s: row["close"] for s, row in today.items()})
-        prev_eq = equity[d] = cash + sum(p.qty * last_close[s] for s, p in positions.items())
+        prev_eq = equity[d] = cash + sum(value(p, last_close[s]) for s, p in positions.items())
         weekly_limit_hit = prev_eq < week_start_eq * (1 - risk.weekly_loss_limit_pct / 100)
         entries = [] if weekly_limit_hit else pick(today, rules)
+        prev_day = d
 
     if days:  # flatten at the end so every trade is closed and costed
         for s in list(positions):

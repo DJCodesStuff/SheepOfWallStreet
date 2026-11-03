@@ -2,7 +2,8 @@
 
 1. refresh the broker (fill/reject pending orders against the new bar)
 2. reconcile: entry fills open trades, exit fills close them (pnl, exit reason)
-3. manage open trades: trend break -> exit at next open, else ratchet the trailing stop
+3. manage open trades: trend break -> exit at next open; futures held over a roll date ->
+   roll (sell + buy) at the next open; else ratchet the trailing stop
 4. scan for entries and size them; each entry is a bracket: market buy + OCO stop/target sells
 5. snapshot equity
 
@@ -14,6 +15,7 @@ trade stores it, so the Reviewer can judge process. Re-running on the same eveni
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from datetime import datetime, timedelta
 
@@ -23,11 +25,12 @@ from psycopg.types.json import Jsonb
 
 from sheep.backtest.engine import DEFAULT_COSTS, Costs
 from sheep.broker.paper import PaperBroker
-from sheep.common.config import Risk
+from sheep.common.config import Risk, instrument
 from sheep.trader.data import BAR_FINAL_AT, NY, last_final_close, load_bars
 from sheep.trader.strategy import Rules, scan, signals, trail_stop
 
 _EXIT_REASON = {"stop": "stop", "limit": "target"}
+_EPS = 1e-9
 
 
 def run_profile(
@@ -96,24 +99,32 @@ def _reconcile(conn: psycopg.Connection, pid: int, log: list[str]) -> None:
         (pid, pid),
     )
 
-    # Exit fills -> close the trade.
-    for o in conn.execute(
-        """SELECT o.*, t.entry_price, e.fees AS entry_fees FROM orders o
-           JOIN trades t ON t.id = o.trade_id
-           JOIN orders e ON e.trade_id = t.id AND e.side = 'buy'
-           WHERE o.profile_id = %s AND o.side = 'sell' AND o.status = 'filled'
-             AND t.exit_ts IS NULL""",
-        (pid,),
+    # A trade whose position is back to zero is closed. Its P&L is the cash flow of every fill
+    # (entry, rolls, exit), so roll costs and fees are included.
+    for t in conn.execute(
+        "SELECT * FROM trades WHERE profile_id = %s AND exit_ts IS NULL ORDER BY id", (pid,)
     ).fetchall():
-        intent = o["intent_json"] or {}
-        reason = _EXIT_REASON.get(o["type"]) or intent.get("exit_reason", "manual")
-        pnl = o["qty"] * (o["fill_price"] - o["entry_price"]) - o["fees"] - o["entry_fees"]
+        fills = conn.execute(
+            "SELECT * FROM orders WHERE trade_id = %s AND status = 'filled' "
+            "ORDER BY filled_at, id", (t["id"],),
+        ).fetchall()
+        if sum(o["qty"] if o["side"] == "buy" else -o["qty"] for o in fills) > _EPS:
+            continue
+        mult = instrument(t["symbol"]).multiplier
+        pnl = sum((o["qty"] if o["side"] == "sell" else -o["qty"]) * o["fill_price"] * mult
+                  - o["fees"] for o in fills)
+        last = fills[-1]
+        intent = last["intent_json"] or {}
+        reason = ("roll_failed" if intent.get("roll")
+                  else _EXIT_REASON.get(last["type"]) or intent.get("exit_reason", "manual"))
+        conn.execute("UPDATE orders SET status = 'cancelled' WHERE trade_id = %s "
+                     "AND status = 'pending'", (t["id"],))
         conn.execute(
             "UPDATE trades SET exit_ts = %s, exit_price = %s, pnl = %s, exit_reason = %s "
             "WHERE id = %s",
-            (o["filled_at"], o["fill_price"], pnl, reason, o["trade_id"]),
+            (last["filled_at"], last["fill_price"], pnl, reason, t["id"]),
         )
-        log.append(f"closed trade {o['trade_id']} ({reason}): pnl {pnl:+.2f}")
+        log.append(f"closed trade {t['id']} ({reason}): pnl {pnl:+.2f}")
 
 
 def _manage(conn, broker: PaperBroker, pid: int, rules: Rules, bars, now, log) -> None:
@@ -139,6 +150,21 @@ def _manage(conn, broker: PaperBroker, pid: int, rules: Rules, bars, now, log) -
             )
             log.append(f"trade {t['id']} {t['symbol']}: trend break, exit at next open")
             continue
+
+        inst = instrument(t["symbol"])
+        if inst.roll_months:
+            last_roll = conn.execute(  # entry fill or the latest roll's buy
+                "SELECT max(filled_at) AS at FROM orders WHERE trade_id = %s AND side = 'buy' "
+                "AND status = 'filled'", (t["id"],),
+            ).fetchone()["at"].astimezone(NY).date()
+            if inst.rolls_between(last_roll, last_final_close(now).date()):
+                for side in ("sell", "buy"):  # same bar, sell first: close then reopen
+                    oid = broker.submit(t["symbol"], side, t["qty"], at=now)
+                    conn.execute(
+                        "UPDATE orders SET trade_id = %s, intent_json = %s WHERE id = %s",
+                        (t["id"], Jsonb({"roll": True}), oid),
+                    )
+                log.append(f"trade {t['id']} {t['symbol']}: roll to next contract at next open")
 
         stop_orders = [o for o in exits if o["type"] == "stop"]
         current = stop_orders[0]["stop_price"] if stop_orders else t["stop"]
@@ -180,22 +206,35 @@ def _enter(conn, broker: PaperBroker, p, rules: Rules, risk: Risk, bars, costs: 
         log.append(f"weekly loss limit hit (equity {equity:.2f} vs {week_start:.2f}): no entries")
         return
 
-    committed = sum(o["qty"] * costs.buy(o["intent_json"]["ref_price"]) for o in pending)
-    cash = broker.cash() - committed
+    def is_future(sym: str) -> bool:
+        return instrument(sym).is_future
+
+    cash = broker.cash() - sum(o["qty"] * costs.buy(o["intent_json"]["ref_price"])
+                               for o in pending if not is_future(o["symbol"]))
+    free_margin = equity - broker.margin_in_use() - sum(
+        o["qty"] * instrument(o["symbol"]).margin for o in pending if is_future(o["symbol"]))
     for c in scan(bars, rules):
         if c.symbol in busy:
             continue
         if slots <= 0:
             log.append(f"skip {c.symbol} {c.setup}: max open positions")
             continue
+        inst = instrument(c.symbol)
         est_fill = costs.buy(c.ref_price)
-        qty = min(
-            equity * risk.risk_per_trade_pct / 100 / (est_fill - c.stop),
-            (cash - costs.fee_per_order) / est_fill,
-        )
-        if qty <= 0:
-            log.append(f"skip {c.symbol} {c.setup}: no cash")
-            continue
+        budget = equity * risk.risk_per_trade_pct / 100
+        risk_per_unit = (est_fill - c.stop) * inst.multiplier
+        if inst.is_future:
+            qty = math.floor(min(budget / risk_per_unit, free_margin / inst.margin))
+            if qty < 1:
+                log.append(f"skip {c.symbol} {c.setup}: 1 contract risks ${risk_per_unit:,.0f} "
+                           f"and needs ${inst.margin:,.0f} margin; budget ${budget:,.2f} risk, "
+                           f"${free_margin:,.2f} free margin")
+                continue
+        else:
+            qty = min(budget / risk_per_unit, (cash - costs.fee_per_order) / est_fill)
+            if qty <= 0:
+                log.append(f"skip {c.symbol} {c.setup}: no cash")
+                continue
         buy = broker.submit(c.symbol, "buy", qty, at=now)
         group = f"bracket-{buy}"
         conn.execute(
@@ -209,7 +248,10 @@ def _enter(conn, broker: PaperBroker, p, rules: Rules, risk: Risk, bars, costs: 
         broker.submit(c.symbol, "sell", qty, "stop", stop_price=c.stop, oco_group=group, at=now)
         broker.submit(c.symbol, "sell", qty, "limit", limit_price=c.target, oco_group=group,
                       at=now)
-        cash -= qty * est_fill + costs.fee_per_order
+        if inst.is_future:
+            free_margin -= qty * inst.margin
+        else:
+            cash -= qty * est_fill + costs.fee_per_order
         slots -= 1
         log.append(f"entry {c.symbol} {c.setup}: buy {qty:.4f} ~{c.ref_price:.2f}, "
                    f"stop {c.stop:.2f}, target {c.target:.2f}")

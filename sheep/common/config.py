@@ -1,9 +1,11 @@
-"""Load and validate config/profiles.yaml and config/strategy.yaml."""
+"""Load and validate config/profiles.yaml, strategy.yaml and instruments.yaml."""
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import date
+from functools import cache
 from pathlib import Path
 
 import yaml
@@ -26,6 +28,65 @@ class Risk:
     risk_per_trade_pct: float
     max_open_positions: int
     weekly_loss_limit_pct: float
+
+
+@dataclass(frozen=True)
+class Instrument:
+    """How a symbol trades. The default is a stock/ETF: fractional units, paid in full."""
+
+    name: str = ""
+    multiplier: float = 1.0  # dollars per 1.00 point of price
+    margin: float | None = None  # per contract; None = paid in full (stocks, ETFs)
+    fee: float = 0.0  # per unit per side, on top of Costs.fee_per_order
+    roll_months: tuple[int, ...] = ()
+    roll_day: int = 10
+
+    @property
+    def is_future(self) -> bool:  # futures: whole contracts, margin, P&L x multiplier, rolls
+        return self.margin is not None
+
+    def rolls_between(self, after: date, upto: date) -> bool:
+        """True if a roll date falls in (after, upto]."""
+        return any(
+            after < date(y, m, self.roll_day) <= upto
+            for y in range(after.year, upto.year + 1)
+            for m in self.roll_months
+        )
+
+
+EQUITY = Instrument()
+
+
+def asset_class(symbol: str) -> str:
+    if symbol.endswith("=F"):
+        return "future"
+    if symbol.startswith("^"):
+        return "index"
+    return "other" if "=" in symbol else "equity"
+
+
+@cache
+def load_futures(path: Path = CONFIG_DIR / "instruments.yaml") -> dict[str, Instrument]:
+    raw = (yaml.safe_load(Path(path).read_text()) or {}).get("futures") or {}
+    return {
+        s: Instrument(**(spec | {"roll_months": tuple(spec.get("roll_months", ()))}))
+        for s, spec in raw.items()
+    }
+
+
+def instrument(symbol: str) -> Instrument:
+    """Trading terms for a symbol; raises for anything that can't be traded."""
+    kind = asset_class(symbol)
+    if kind == "equity":
+        return EQUITY
+    if kind == "future":
+        if symbol not in load_futures():
+            raise ConfigError(f"{symbol}: no contract spec; add it to config/instruments.yaml")
+        return load_futures()[symbol]
+    if kind == "index":
+        raise ConfigError(f"{symbol} is an index and can't be bought directly; trade an ETF "
+                          "(e.g. SPY for ^GSPC) or a future (e.g. MES=F) instead")
+    raise ConfigError(f"{symbol}: only stocks, ETFs and listed futures (=F) are supported")
 
 
 @dataclass(frozen=True)
@@ -88,6 +149,13 @@ def parse_profile(raw: dict, strategies: dict[str, dict]) -> Profile:
     check(len(p.watchlist) > 0, "watchlist is empty")
     bad = [s for s in p.watchlist if not SYMBOL_RE.fullmatch(s)]
     check(not bad, f"bad symbols: {bad}")
+    for s in p.watchlist:
+        try:
+            inst = instrument(s)
+        except ConfigError as e:
+            check(False, str(e))
+        check(not (inst.is_future and p.mode == "live"),
+              f"{s}: futures are paper-only (no live futures broker)")
     check(0 < p.risk.risk_per_trade_pct <= 100, "risk_per_trade_pct must be in (0, 100]")
     check(0 < p.risk.weekly_loss_limit_pct <= 100, "weekly_loss_limit_pct must be in (0, 100]")
     check(p.risk.max_open_positions >= 1, "max_open_positions must be >= 1")

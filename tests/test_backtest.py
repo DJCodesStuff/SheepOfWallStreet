@@ -14,7 +14,7 @@ RISK = Risk(risk_per_trade_pct=1.0, max_open_positions=1, weekly_loss_limit_pct=
 NO_COSTS = Costs(slippage_bps=0)
 
 
-def rising_then_drop(n=30, drop_at=20, gap=False):
+def rising_then_drop(n=30, drop_at=20, gap=False, start="2026-01-05", symbol="X"):
     """Steady 1%/day rise (a breakout every day), then one crash bar, then flat."""
     close = 100 * 1.01 ** np.arange(n)
     close[drop_at:] = close[drop_at - 1] * 0.85
@@ -22,8 +22,8 @@ def rising_then_drop(n=30, drop_at=20, gap=False):
     if gap:
         open_[drop_at] = close[drop_at]
     high, low = np.maximum(open_, close) * 1.005, np.minimum(open_, close) * 0.995
-    idx = pd.bdate_range("2026-01-05", periods=n, name="date")
-    return {"X": pd.DataFrame(
+    idx = pd.bdate_range(start, periods=n, name="date")
+    return {symbol: pd.DataFrame(
         {"open": open_, "high": high, "low": low, "close": close, "volume": 1e6}, index=idx
     )}
 
@@ -71,3 +71,24 @@ def test_walk_forward_never_touches_holdout():
     assert len(folds) >= 2
     for f, nxt in zip(folds, folds[1:], strict=False):
         assert f.test_end == nxt.test_start  # contiguous, non-overlapping test windows
+
+
+# Futures: MES=F is 5 dollars per point, $2,500 margin, $0.85/side, rolls on the 10th of
+# Mar/Jun/Sep/Dec (config/instruments.yaml). This series is held across the March roll.
+def mes_bars():
+    return rising_then_drop(n=40, drop_at=30, start="2026-02-16", symbol="MES=F")
+
+
+def test_futures_whole_contracts_margin_and_roll():
+    res = run(mes_bars(), RULES, RISK, capital=61_000, costs=NO_COSTS)
+    t = res.trades.iloc[0]
+    assert t.qty == 24  # risk budget allows more, but $61k of margin buys 24 contracts
+    fees = 2 * 0.85 * t.qty
+    roll = 2 * 0.85 * t.qty  # zero slippage: a roll costs only the fees
+    assert t.entry_date < pd.Timestamp("2026-03-10") < t.exit_date
+    assert t.pnl == pytest.approx(t.qty * 5 * (t.exit_price - t.entry_price) - fees - roll)
+    assert res.equity.iloc[-1] == pytest.approx(61_000 + res.trades.pnl.sum())
+
+
+def test_futures_too_big_for_small_account():
+    assert run(mes_bars(), RULES, RISK, capital=100, costs=NO_COSTS).trades.empty

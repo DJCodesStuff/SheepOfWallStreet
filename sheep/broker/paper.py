@@ -7,9 +7,12 @@ Fill model (same as the backtester):
   the bar's range touched it. Stops are checked before limits on the same bar (conservative).
 - Slippage (bps, against you) on every fill, plus the flat fee per order.
 - Buys that cost more than the cash on hand, and sells of more than is held, are rejected.
+- Futures (config/instruments.yaml): whole contracts only, a buy needs its initial margin free
+  (equity minus margin already in use), fees are per contract, and cash moves only by realised
+  P&L and fees, never by the contract's notional value.
 
-Cash and positions are derived from filled orders, so the orders table is the single source of
-truth. Methods never commit: the caller owns the transaction.
+Cash and positions are derived by replaying filled orders, so the orders table is the single
+source of truth. Methods never commit: the caller owns the transaction.
 
 AlpacaBroker (step 10) must expose the same public methods.
 """
@@ -24,6 +27,7 @@ import pandas as pd
 import psycopg
 
 from sheep.backtest.engine import DEFAULT_COSTS, Costs
+from sheep.common.config import instrument
 from sheep.trader.data import NY, last_final_close, load_bars
 
 _PRIORITY = {"market": 0, "stop": 1, "limit": 2}
@@ -109,28 +113,43 @@ class PaperBroker:
 
     # --- account --------------------------------------------------------------------------
 
-    def cash(self) -> float:
-        flow = self.conn.execute(
-            """SELECT COALESCE(SUM(CASE side WHEN 'buy' THEN -qty * fill_price
-                                             ELSE qty * fill_price END - fees), 0) AS flow
-               FROM orders WHERE profile_id = %s AND status = 'filled'""",
+    def _book(self) -> tuple[float, dict[str, list[float]]]:
+        """Replay filled orders into (cash, {symbol: [qty, average price]})."""
+        cash, book = self.capital, {}
+        for o in self.conn.execute(
+            "SELECT symbol, side, qty, fill_price, fees FROM orders "
+            "WHERE profile_id = %s AND status = 'filled' ORDER BY filled_at, id",
             (self.profile_id,),
-        ).fetchone()["flow"]
-        return self.capital + flow
+        ):
+            i, q, px = instrument(o["symbol"]), o["qty"], o["fill_price"]
+            pos = book.setdefault(o["symbol"], [0.0, 0.0])
+            if o["side"] == "buy":
+                cash -= 0 if i.is_future else q * px
+                pos[1] = (pos[0] * pos[1] + q * px) / (pos[0] + q)
+                pos[0] += q
+            else:
+                cash += (px - pos[1]) * q * i.multiplier if i.is_future else q * px
+                pos[0] -= q
+            cash -= o["fees"]
+        return cash, {s: p for s, p in book.items() if abs(p[0]) > _EPS}
+
+    def cash(self) -> float:
+        return self._book()[0]
 
     def positions(self) -> dict[str, float]:
-        rows = self.conn.execute(
-            """SELECT symbol, SUM(CASE side WHEN 'buy' THEN qty ELSE -qty END) AS qty
-               FROM orders WHERE profile_id = %s AND status = 'filled' GROUP BY symbol""",
-            (self.profile_id,),
-        ).fetchall()
-        return {r["symbol"]: r["qty"] for r in rows if abs(r["qty"]) > _EPS}
+        return {s: p[0] for s, p in self._book()[1].items()}
 
     def equity(self) -> float:
-        """Cash plus positions marked at their latest final close."""
-        return self.cash() + sum(
-            q * self.bars(s)["close"].iloc[-1] for s, q in self.positions().items()
-        )
+        """Cash plus positions marked at their latest final close (futures: open P&L)."""
+        cash, book = self._book()
+        for s, (q, avg) in book.items():
+            i, close = instrument(s), self.bars(s)["close"].iloc[-1]
+            cash += (close - avg) * q * i.multiplier if i.is_future else q * close
+        return cash
+
+    def margin_in_use(self) -> float:
+        return sum(q * instrument(s).margin for s, q in self.positions().items()
+                   if instrument(s).is_future)
 
     def snapshot(self, now: datetime | None = None) -> None:
         """Record the latest final session's cash and equity."""
@@ -183,12 +202,17 @@ class PaperBroker:
         return filled
 
     def _fill(self, o: dict, d: pd.Timestamp, px: float) -> bool:
-        buy = o["side"] == "buy"
+        buy, i, qty = o["side"] == "buy", instrument(o["symbol"]), o["qty"]
         fill = self.costs.buy(px) if buy else self.costs.sell(px)
-        fee = self.costs.fee_per_order
-        if (buy and o["qty"] * fill + fee > self.cash() + _EPS) or (
-            not buy and o["qty"] > self.positions().get(o["symbol"], 0) + _EPS
-        ):
+        fee = self.costs.fee_per_order + i.fee * qty
+        if not buy:
+            ok = qty <= self.positions().get(o["symbol"], 0) + _EPS
+        elif i.is_future:
+            ok = float(qty).is_integer() and (
+                fee + qty * i.margin <= self.equity() - self.margin_in_use() + _EPS)
+        else:
+            ok = qty * fill + fee <= self.cash() + _EPS
+        if not ok:
             self._set_status(o, "rejected")
             return False
         self.conn.execute(
