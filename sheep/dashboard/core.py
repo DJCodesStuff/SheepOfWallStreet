@@ -111,6 +111,29 @@ HELP = {
     "max_positions": "Most trades open at once.",
     "weekly_loss_limit": "If equity falls this much below the start of the week, no new "
                          "entries until next week.",
+    "scanner": "Daily-close setups from trader-scanner (day-trader-skill): 20-day closing-high "
+               "breakout, bull flag, reclaimed the 20-day average, oversold, oversold bounce. "
+               "Each hit also shows the Phase 1 trend filter and momentum.",
+    "scan_symbols": "Tickers to scan, separated by spaces or commas. Starts with every "
+                    "profile's watchlist plus the main ETFs.",
+    "min_volume": "Average shares traded a day over the last 20 sessions. Thin stocks cost "
+                  "more to trade than the fees suggest.",
+    "above_200d": "Last close above the 200-day average: the Phase 1 trend filter, so the "
+                  "Trader could go long it.",
+    "news": "Yahoo Finance headlines and SEC 8-K filings per ticker, tagged by kind. SEC "
+            "filings need SEC_USER_AGENT set; ETFs have none.",
+    "important_8k": "A material 8-K item: earnings results, officer change, impairment, "
+                    "delisting notice, restatement, bankruptcy or a cyber incident.",
+    "timemachine": "From trader-timemachine (day-trader-skill), on daily bars: each replay "
+                   "draws past days at random and checks the stop and target day by day, as "
+                   "the backtester does. The stop is fixed (no trailing).",
+    "tm_symbol": "Open trades and the profile's watchlist. Type any other ticker to add it.",
+    "tm_days": "How long each replay holds the trade. 'Neither' means still open at the end.",
+    "tm_seed": "Same plan, data and seed give the same numbers on any machine.",
+    "tm_green": "Hit the target, or still open and above the entry at the end.",
+    "tm_history": "Every past day this rule version's setup fired on this symbol (ignoring the "
+                  "watchlist momentum rank), traded from the next open with the same stop, "
+                  "target and holding period. What really happened, not a simulation.",
     "reset": "Deletes the profile's orders, trades and equity history, and starts again "
              "from its starting capital.",
 }

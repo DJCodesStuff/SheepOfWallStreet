@@ -31,7 +31,8 @@ def test_every_page_renders_for_every_profile(monkeypatch):
     assert not at.exception
     for name in at.sidebar.selectbox[0].options:
         at.sidebar.selectbox[0].select(name).run()
-        for page in ("overview", "journal", "rules", "backtest", "manage"):
+        for page in ("overview", "journal", "rules", "scanner", "timemachine", "backtest",
+                     "manage"):
             at.switch_page(f"{PAGES}{page}.py").run()
             assert not at.exception, (name, page)
 

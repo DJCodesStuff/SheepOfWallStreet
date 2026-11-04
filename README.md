@@ -35,3 +35,25 @@ The dashboard deploys to Streamlit Community Cloud as-is: main file `streamlit_a
 
 Profiles live in `config/profiles.yaml`, rule versions in `config/strategy.yaml`. Rule versions are
 immutable once synced; add a new version to change params.
+
+## Research tools
+
+Adapted for daily bars from [day-trader-skill](https://github.com/Jakeschincariol/day-trader-skill)
+(MIT, Jake Schincariol): its scanner, news monitor, time machine and risk manager. Also on the
+dashboard's Scanner and Time machine pages.
+
+```sh
+uv run python -m sheep.trader.scanner SPY QQQ XLK JPM   # setups on daily closes; --universe = whole US market
+uv run --env-file .env python -m sheep.trader.news JPM XLF --hours 48   # headlines + SEC 8-Ks
+uv run python -m sheep.backtest.timemachine SPY --version v1           # 10,000 replays + the rule's real record
+```
+
+SEC filings need `SEC_USER_AGENT="Your Name you@example.com"` in `.env` (and in the Streamlit
+app's Secrets); without it the news shows headlines only.
+
+**Risk gate.** Every new entry, in the Trader and in backtests, must pass `sheep/trader/risk.py`
+or it is blocked (logged as `BLOCK ...`, never resized): stop below entry below target, loss at
+the stop within `risk_per_trade_pct`, reward:risk of at least `min_reward_risk` (default 1),
+position cost within `max_position_pct` of equity (default 100), symbol not in `blocked`, and
+(Trader only) a signal from the latest session's bar, not a stale one. Set the optional keys under
+a profile's `risk:` in `config/profiles.yaml`. Exits are never blocked.

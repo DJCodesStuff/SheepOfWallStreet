@@ -5,6 +5,7 @@ Mirrors live behaviour: signals at day t's close (strategy.pick), orders fill at
 - Exits: a gap through stop/target fills at the open. Otherwise, if a bar touches both stop and
   target, the stop is assumed to hit first (conservative). Trend break exits at the next open.
 - Sizing: risk `risk_per_trade_pct` of equity between fill and stop, capped by cash (no leverage).
+- Risk gate: each entry must pass sheep/trader/risk.py at its actual fill, as in the Trader.
 
     uv run python -m sheep.backtest.engine main_paper [--versions v1 v2_candidate] [--holdout]
 """
@@ -18,6 +19,7 @@ from datetime import date
 import pandas as pd
 
 from sheep.common.config import Risk, instrument
+from sheep.trader.risk import check_entry
 from sheep.trader.strategy import Rules, pick, signals, trail_stop
 
 
@@ -146,7 +148,7 @@ def run(
                 qty = math.floor(min(qty, (prev_eq - in_use) / i.margin))
             else:
                 qty = min(qty, (cash - costs.fee_per_order) / fill)
-            if qty <= 0:
+            if qty <= 0 or check_entry(c.symbol, qty, fill, c.stop, c.target, prev_eq, risk, i):
                 continue
             f = fee(c.symbol, qty)
             cash -= f + (0 if i.is_future else qty * fill)

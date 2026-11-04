@@ -22,6 +22,8 @@ nav = st.navigation([
     st.Page(pages + "overview.py", title="Overview", icon=":material/dashboard:", default=True),
     st.Page(pages + "journal.py", title="Trade journal", icon=":material/receipt_long:"),
     st.Page(pages + "rules.py", title="Rules", icon=":material/rule:"),
+    st.Page(pages + "scanner.py", title="Scanner", icon=":material/radar:"),
+    st.Page(pages + "timemachine.py", title="Time machine", icon=":material/history:"),
     st.Page(pages + "backtest.py", title="Backtest", icon=":material/query_stats:"),
     st.Page(pages + "options.py", title="Options", icon=":material/candlestick_chart:"),
     st.Page(pages + "manage.py", title="Manage", icon=":material/tune:"),

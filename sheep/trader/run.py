@@ -4,7 +4,8 @@
 2. reconcile: entry fills open trades, exit fills close them (pnl, exit reason)
 3. manage open trades: trend break -> exit at next open; futures held over a roll date ->
    roll (sell + buy) at the next open; else ratchet the trailing stop
-4. scan for entries and size them; each entry is a bracket: market buy + OCO stop/target sells
+4. scan for entries, size them, and pass each through the risk gate (sheep/trader/risk.py);
+   each entry is a bracket: market buy + OCO stop/target sells
 5. snapshot equity
 
 Every entry order carries its intent (stop, target, rule version, signal reasoning), and every
@@ -27,6 +28,7 @@ from sheep.backtest.engine import DEFAULT_COSTS, Costs
 from sheep.broker.paper import PaperBroker
 from sheep.common.config import Risk, instrument
 from sheep.trader.data import BAR_FINAL_AT, NY, last_final_close, load_bars
+from sheep.trader.risk import check_entry
 from sheep.trader.strategy import Rules, scan, signals, trail_stop
 
 _EXIT_REASON = {"stop": "stop", "limit": "target"}
@@ -195,6 +197,9 @@ def _enter(conn, broker: PaperBroker, p, rules: Rules, risk: Risk, bars, costs: 
 
     equity = broker.equity()
     today = last_final_close(now).date()
+    # Latest weekday on or before today. ponytail: no holiday calendar, so on a market holiday
+    # every signal reads as stale and nothing is entered (the evening before already acted).
+    expected = today - timedelta(days=max(0, today.weekday() - 4))
     monday = today - timedelta(days=today.weekday())
     row = conn.execute(
         "SELECT equity FROM equity_snapshots WHERE profile_id = %s AND date < %s "
@@ -235,6 +240,12 @@ def _enter(conn, broker: PaperBroker, p, rules: Rules, risk: Risk, bars, costs: 
             if qty <= 0:
                 log.append(f"skip {c.symbol} {c.setup}: no cash")
                 continue
+        why = check_entry(c.symbol, qty, est_fill, c.stop, c.target, equity, risk, inst)
+        if c.date.date() < expected:  # the data feed missed a bar: don't act on old prices
+            why.insert(0, f"stale signal from {c.date.date()}, expected {expected}")
+        if why:
+            log.append(f"BLOCK {c.symbol} {c.setup}: " + "; ".join(why))
+            continue
         buy = broker.submit(c.symbol, "buy", qty, at=now)
         group = f"bracket-{buy}"
         conn.execute(

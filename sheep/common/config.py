@@ -28,6 +28,10 @@ class Risk:
     risk_per_trade_pct: float
     max_open_positions: int
     weekly_loss_limit_pct: float
+    # Pre-trade gate (sheep/trader/risk.py). The defaults pass every entry the sizing allows.
+    min_reward_risk: float = 1.0  # (target - entry) / (entry - stop)
+    max_position_pct: float = 100.0  # one stock/ETF position's cost, as % of equity
+    blocked: tuple[str, ...] = ()  # never enter these (e.g. ahead of earnings)
 
 
 @dataclass(frozen=True)
@@ -131,7 +135,8 @@ def parse_profile(raw: dict, strategies: dict[str, dict]) -> Profile:
             starting_capital=float(raw["starting_capital"]),
             strategy_version=raw["strategy_version"],
             watchlist=tuple(str(s).upper() for s in raw["watchlist"]),
-            risk=Risk(**raw["risk"]),
+            risk=Risk(**raw["risk"] | {
+                "blocked": tuple(str(s).upper() for s in raw["risk"].get("blocked") or ())}),
             currency=raw.get("currency", "USD"),
         )
     except (KeyError, TypeError, ValueError) as e:
@@ -159,4 +164,6 @@ def parse_profile(raw: dict, strategies: dict[str, dict]) -> Profile:
     check(0 < p.risk.risk_per_trade_pct <= 100, "risk_per_trade_pct must be in (0, 100]")
     check(0 < p.risk.weekly_loss_limit_pct <= 100, "weekly_loss_limit_pct must be in (0, 100]")
     check(p.risk.max_open_positions >= 1, "max_open_positions must be >= 1")
+    check(p.risk.min_reward_risk >= 0, "min_reward_risk must be >= 0")
+    check(0 < p.risk.max_position_pct <= 100, "max_position_pct must be in (0, 100]")
     return p
