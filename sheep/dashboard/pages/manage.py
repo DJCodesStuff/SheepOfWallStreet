@@ -30,8 +30,9 @@ left, right = st.columns(2, gap="large")
 with left:
     with st.container(border=True):
         st.markdown("#### :material/play_arrow: Run Trader")
-        st.caption(f"Today's cycle for **{name}**: fill orders, manage exits, place new entries. "
-                   "Refuses before 4:30pm New York time on weekdays.")
+        st.caption(f"Run the Trader for **{name}** now. Weekdays 9:30am-4pm New York time: "
+                   "enter at today's opening price. After 4:30pm and on weekends: fill orders, "
+                   "close trades, trail stops. Refuses at other times.")
         if p["broker"] != "paper":
             st.caption(":material/block: Only built-in paper profiles can run here.")
         elif st.button(f"Run Trader for {name}", type="primary", help=HELP["run_trader"]):

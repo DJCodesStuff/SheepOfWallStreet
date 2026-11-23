@@ -1,8 +1,14 @@
 name: Daily Trader
 
+# One job, two runs; sheep.trader.run picks what to do from the New York time.
+# GitHub can start scheduled jobs late (sometimes by an hour), so both have slack built in.
 on:
   schedule:
-    # 22:15 UTC Mon-Fri = 17:15 New York in winter, 18:15 in summer: after the 16:30 bar cutoff.
+    # Open run: 14:45 UTC Mon-Fri = 09:45 New York in winter, 10:45 in summer. Enters at the
+    # day's opening price; anything before 16:00 New York still counts.
+    - cron: "45 14 * * 1-5"
+    # Evening run: 22:15 UTC Mon-Fri = 17:15 New York in winter, 18:15 in summer: after the
+    # 16:30 bar cutoff. Fills, closes trades, trails stops, queues exits.
     - cron: "15 22 * * 1-5"
   workflow_dispatch:
 

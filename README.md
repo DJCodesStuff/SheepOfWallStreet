@@ -20,13 +20,15 @@ Tip: `export UV_ENV_FILE=.env` to drop the `--env-file` flag.
 ## Daily use
 
 ```sh
-uv run --env-file .env python -m sheep.trader.run          # after 16:30 NY: fills, exits, new entries
+uv run --env-file .env python -m sheep.trader.run          # 09:30-16:00 NY: entries at the open
+                                                           # after 16:30 NY: fills, exits, stops
 uv run --env-file .env streamlit run streamlit_app.py      # read-only dashboard
 uv run --env-file .env python -m sheep.backtest.engine main_paper   # walk-forward vs SPY
 ```
 
-The Trader runs itself on weekdays at 22:15 UTC through GitHub Actions
-(`.github/workflows/trader.yml`); add `DATABASE_URL` under the repo's Settings → Secrets and
+The Trader runs itself twice each weekday through GitHub Actions
+(`.github/workflows/trader.yml`): at 14:45 UTC to enter at the day's opening price, and at
+22:15 UTC to fill orders, close trades and trail stops; add `DATABASE_URL` under the repo's Settings → Secrets and
 variables → Actions. You can also start it by hand from the Actions tab ("Run workflow"). A run
 where any profile fails is marked failed, and GitHub emails you.
 

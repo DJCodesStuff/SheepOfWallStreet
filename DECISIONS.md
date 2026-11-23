@@ -2,6 +2,48 @@
 
 Each entry: what was decided, what was rejected, and what it costs.
 
+## Entries are sized and placed at the next open, not the signal close (2026-11-23)
+
+- **Decided:** The Trader runs twice each weekday (GitHub Actions, `.github/workflows/trader.yml`).
+  The **evening run** (22:15 UTC, after the 16:30 NY bar cutoff) fills orders, closes trades,
+  trails stops, queues trend-break exits and logs signals. It places no entries. The **open
+  run** (14:45 UTC = 09:45 NY in winter, 10:45 in summer; anything 09:30-16:00 NY counts)
+  re-scans the previous close and reads today's opening price (yfinance). It sizes each entry
+  at that price, so the stop risks exactly `risk_per_trade_pct`, then runs the risk gate. The
+  paper broker now lets an order placed before the 16:00 close fill on that day's bar, so the
+  entry fills at the open it was sized from. This is what the backtester already did, so the
+  Trader and backtest now agree (tested, including a gap-up case).
+- **Why:** On 2026-11-05 main_paper's XLV and XLF entries gapped up 1.0-1.3% at the open. They
+  were sized at the signal close against a stop fixed at that close, so they risked
+  $1.28 and $1.44 instead of $1.00.
+- **Rejected:** A separate gap filter (skip when the open is >0.5 ATR above the close). The
+  existing reward:risk minimum already voids big gaps, because the target stays fixed while
+  the risk grows. Keeping the old evening sizing plus a gap buffer was also rejected: it would
+  still drift from the backtester.
+- **Cost:** A paper entry fills at the open even when the run happens later (GitHub can start
+  cron jobs an hour late). The run only ever reads the opening price, so nothing later leaks
+  in, but a live adapter will fill at market instead and must model that. The morning after a
+  market holiday enters nothing (no holiday calendar: signals read as stale). The open run
+  makes one yfinance request per candidate. A symbol whose opening price can't be fetched is
+  skipped for the day. The project's lifecycle note "Monday: skip the open" now applies only
+  to manual trading; the bot enters on Mondays too.
+
+## Open risk across positions is capped by the weekly loss limit (2026-11-23)
+
+- **Decided:** The pre-trade gate (`check_entry`, shared by the Trader and backtester) takes
+  `room`: equity minus the weekly loss floor, minus what every open position (and unfilled
+  entry) loses if its current stop fills. An entry whose own stop loss exceeds `room` is
+  blocked. Each new entry in the same run uses up room. The backtester's weekly-limit check
+  moved from the close to the open, matching the Trader, which also fixes it using the old
+  week's start on Mondays.
+- **Why:** main_paper opened two positions on the same day with about 2.7% at risk against a
+  3% weekly limit. Both stopped out (one through a gap) for -3.05%. The old limit only blocked
+  entries after the loss had happened.
+- **Rejected:** Shrinking the entry to fit the remaining room. The gate blocks and never
+  resizes, as it did before.
+- **Cost:** Fewer entries in a losing week, and a second same-day entry is often blocked when
+  the limit is tight. Gaps through stops can still exceed the limit; this caps planned risk only.
+
 ## Open positions are marked at the latest final daily close (2026-11-23)
 
 - **Decided:** The dashboard Overview values each open position at its symbol's latest final

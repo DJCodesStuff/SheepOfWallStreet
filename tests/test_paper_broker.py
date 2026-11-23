@@ -142,3 +142,11 @@ def test_futures_margin_whole_contracts_and_multiplier(db):
     assert b.cash() == pytest.approx(3000 - 0.85)  # only the fee leaves cash, not the notional
     assert b.margin_in_use() == 2500
     assert b.equity() == pytest.approx(3000 - 0.85 + (104 - 100) * 5)
+
+
+def test_order_placed_during_session_fills_at_that_open(make):
+    b = make((100, 101, 99, 100.5), (102, 103, 101, 102))
+    oid = b.submit("SPY", "buy", 0.5, at=datetime(2026, 1, 5, 10, tzinfo=NY))  # Monday 10:00
+    b.refresh()
+    o = b.order(oid)
+    assert o["status"] == "filled" and o["fill_price"] == 100  # Monday's open, not Tuesday's

@@ -1,15 +1,19 @@
-"""Daily after-close run, per profile:
+"""The Trader, per profile. It runs twice a weekday; which run it is depends on the NY time:
 
-1. refresh the broker (fill/reject pending orders against the new bar)
-2. reconcile: entry fills open trades, exit fills close them (pnl, exit reason)
-3. manage open trades: trend break -> exit at next open; futures held over a roll date ->
-   roll (sell + buy) at the next open; else ratchet the trailing stop
-4. scan for entries, size them, and pass each through the risk gate (sheep/trader/risk.py);
-   each entry is a bracket: market buy + OCO stop/target sells
-5. snapshot equity
+- evening (after 16:30, once the day's bar is final; also weekends):
+  1. refresh the broker (fill/reject pending orders against the new bar)
+  2. reconcile: entry fills open trades, exit fills close them (pnl, exit reason)
+  3. manage open trades: trend break -> exit at next open; futures held over a roll date ->
+     roll (sell + buy) at the next open; else ratchet the trailing stop
+  4. log tonight's signals, snapshot equity
+- open (09:30-16:00): steps 1-3 again (a no-op after a normal evening; catches up a missed one),
+  then enter: re-scan yesterday's final bars, read today's opening price, size each entry at it
+  (so the stop risks exactly risk_per_trade_pct even after a gap) and pass it through the risk
+  gate (sheep/trader/risk.py). Each entry is a bracket: market buy + OCO stop/target sells,
+  filled at today's open. This is what the backtester does, so the two agree.
 
 Every entry order carries its intent (stop, target, rule version, signal reasoning), and every
-trade stores it, so the Reviewer can judge process. Re-running on the same evening is a no-op.
+trade stores it, so the Reviewer can judge process. Re-running either run is a no-op.
 
     uv run --env-file .env python -m sheep.trader.run [profile ...]   # default: all paper profiles
 """
@@ -27,7 +31,15 @@ from psycopg.types.json import Jsonb
 from sheep.backtest.engine import DEFAULT_COSTS, Costs
 from sheep.broker.paper import PaperBroker
 from sheep.common.config import Risk, instrument
-from sheep.trader.data import BAR_FINAL_AT, NY, last_final_close, load_bars
+from sheep.trader.data import (
+    BAR_FINAL_AT,
+    MARKET_CLOSE,
+    MARKET_OPEN,
+    NY,
+    last_final_close,
+    load_bars,
+    today_open,
+)
 from sheep.trader.risk import check_entry
 from sheep.trader.strategy import Rules, scan, signals, trail_stop
 
@@ -40,14 +52,16 @@ def run_profile(
     name: str,
     costs: Costs = DEFAULT_COSTS,
     bars_fn: Callable[[str], pd.DataFrame] = load_bars,
+    open_fn: Callable[[str, datetime], float | None] = today_open,
     now: datetime | None = None,
 ) -> list[str]:
-    """Run one profile's daily cycle. Returns a human-readable log of decisions."""
+    """Run one profile's open or evening run (see module doc). Returns a log of decisions."""
     now = (now or datetime.now(NY)).astimezone(NY)
-    if now.weekday() < 5 and now.time() < BAR_FINAL_AT:
-        # Orders fill on the first bar after the day they're placed, so placing them before
-        # today's bar is final would act a day late on yesterday's signal.
-        return [f"skipped: run after {BAR_FINAL_AT:%H:%M} NY on weekdays"]
+    weekday = now.weekday() < 5
+    at_open = weekday and MARKET_OPEN <= now.time() < MARKET_CLOSE
+    if weekday and not at_open and now.time() < BAR_FINAL_AT:
+        return [f"skipped: entries run {MARKET_OPEN:%H:%M}-{MARKET_CLOSE:%H:%M} NY on weekdays, "
+                f"fills and exits after {BAR_FINAL_AT:%H:%M}"]
     p = conn.execute("SELECT * FROM profiles WHERE name = %s", (name,)).fetchone()
     if p is None:
         raise ValueError(f"unknown profile: {name}")
@@ -67,7 +81,12 @@ def run_profile(
     symbols = set(cfg["watchlist"]) | set(broker.positions())
     bars = {s: bars_fn(s) for s in symbols}
     _manage(conn, broker, p["id"], rules, bars, now, log)
-    _enter(conn, broker, p, rules, risk, {s: bars[s] for s in cfg["watchlist"]}, costs, now, log)
+    watch = {s: bars[s] for s in cfg["watchlist"]}
+    if at_open:
+        _enter(conn, broker, p, rules, risk, bars, watch, costs, open_fn, now, log)
+    else:
+        log += [f"signal {c.symbol} {c.setup} at {c.ref_price:.2f} (stop {c.stop:.2f}): sized "
+                "and checked at the next open" for c in scan(watch, rules)]
     broker.snapshot(now)
     return log
 
@@ -181,25 +200,25 @@ def _manage(conn, broker: PaperBroker, pid: int, rules: Rules, bars, now, log) -
         log.append(f"trade {t['id']} {t['symbol']}: stop {current:.2f} -> {new:.2f}")
 
 
-def _enter(conn, broker: PaperBroker, p, rules: Rules, risk: Risk, bars, costs: Costs,
-           now: datetime, log: list[str]) -> None:
+def _enter(conn, broker: PaperBroker, p, rules: Rules, risk: Risk, bars, watch, costs: Costs,
+           open_fn, now: datetime, log: list[str]) -> None:
     pid = p["id"]
     pending = conn.execute(
         "SELECT * FROM orders WHERE profile_id = %s AND side = 'buy' AND status = 'pending' "
         "AND intent_json IS NOT NULL",
         (pid,),
     ).fetchall()
-    open_syms = {r["symbol"] for r in conn.execute(
-        "SELECT symbol FROM trades WHERE profile_id = %s AND exit_ts IS NULL", (pid,)
-    ).fetchall()}
-    busy = open_syms | {o["symbol"] for o in pending}
+    open_trades = conn.execute(
+        "SELECT * FROM trades WHERE profile_id = %s AND exit_ts IS NULL", (pid,)
+    ).fetchall()
+    busy = {t["symbol"] for t in open_trades} | {o["symbol"] for o in pending}
     slots = risk.max_open_positions - len(busy)
 
-    equity = broker.equity()
-    today = last_final_close(now).date()
-    # Latest weekday on or before today. ponytail: no holiday calendar, so on a market holiday
-    # every signal reads as stale and nothing is entered (the evening before already acted).
-    expected = today - timedelta(days=max(0, today.weekday() - 4))
+    equity = broker.equity()  # positions marked at yesterday's close
+    today = now.date()
+    # Signals come from the previous weekday's close. ponytail: no holiday calendar, so the
+    # morning after a market holiday reads every signal as stale and enters nothing.
+    expected = today - timedelta(days=3 if today.weekday() == 0 else 1)
     monday = today - timedelta(days=today.weekday())
     row = conn.execute(
         "SELECT equity FROM equity_snapshots WHERE profile_id = %s AND date < %s "
@@ -207,25 +226,59 @@ def _enter(conn, broker: PaperBroker, p, rules: Rules, risk: Risk, bars, costs: 
         (pid, monday),
     ).fetchone()
     week_start = row["equity"] if row else p["starting_capital"]
-    if equity < week_start * (1 - risk.weekly_loss_limit_pct / 100):
+    floor = week_start * (1 - risk.weekly_loss_limit_pct / 100)
+    if equity < floor:
         log.append(f"weekly loss limit hit (equity {equity:.2f} vs {week_start:.2f}): no entries")
         return
 
     def is_future(sym: str) -> bool:
         return instrument(sym).is_future
 
-    cash = broker.cash() - sum(o["qty"] * costs.buy(o["intent_json"]["ref_price"])
-                               for o in pending if not is_future(o["symbol"]))
+    entries = [o for o in pending if "bracket" in o["intent_json"]]  # not futures rolls
+
+    def entry_px(o) -> float:  # an unfilled entry's expected fill
+        return costs.buy(o["intent_json"].get("open", o["intent_json"]["ref_price"]))
+
+    # Loss still allowed this week if every stop in force (the latest one per trade) fills
+    stops = {r["trade_id"]: r["stop_price"] for r in conn.execute(
+        "SELECT DISTINCT ON (trade_id) trade_id, stop_price FROM orders WHERE profile_id = %s "
+        "AND type = 'stop' AND trade_id IS NOT NULL ORDER BY trade_id, id DESC", (pid,),
+    ).fetchall()}
+    room = equity - floor - sum(
+        max(0.0, bars[t["symbol"]]["close"].iloc[-1] - stops.get(t["id"], t["stop"]))
+        * t["qty"] * instrument(t["symbol"]).multiplier for t in open_trades
+    ) - sum(max(0.0, entry_px(o) - o["intent_json"]["stop"]) * o["qty"]
+            * instrument(o["symbol"]).multiplier for o in entries)
+
+    cash = broker.cash() - sum(o["qty"] * entry_px(o) for o in entries
+                               if not is_future(o["symbol"]))
     free_margin = equity - broker.margin_in_use() - sum(
         o["qty"] * instrument(o["symbol"]).margin for o in pending if is_future(o["symbol"]))
-    for c in scan(bars, rules):
+    for c in scan(watch, rules):
         if c.symbol in busy:
             continue
         if slots <= 0:
             log.append(f"skip {c.symbol} {c.setup}: max open positions")
             continue
+        if c.date.date() < expected:  # the data feed missed a bar: don't act on old prices
+            log.append(f"BLOCK {c.symbol} {c.setup}: stale signal from {c.date.date()}, "
+                       f"expected {expected}")
+            continue
+        try:
+            px = open_fn(c.symbol, now)
+        except Exception as e:  # noqa: BLE001 - one symbol's feed failing skips only it
+            px, err = None, f" ({e})"
+        else:
+            err = ""
+        if px is None:
+            log.append(f"skip {c.symbol} {c.setup}: no opening price for {today} yet{err}")
+            continue
         inst = instrument(c.symbol)
-        est_fill = costs.buy(c.ref_price)
+        est_fill = costs.buy(px)
+        if not c.stop < est_fill < c.target:
+            log.append(f"skip {c.symbol} {c.setup}: opened at {px:.2f}, past the stop "
+                       f"{c.stop:.2f} or target {c.target:.2f}; the setup is void")
+            continue
         budget = equity * risk.risk_per_trade_pct / 100
         risk_per_unit = (est_fill - c.stop) * inst.multiplier
         if inst.is_future:
@@ -240,9 +293,7 @@ def _enter(conn, broker: PaperBroker, p, rules: Rules, risk: Risk, bars, costs: 
             if qty <= 0:
                 log.append(f"skip {c.symbol} {c.setup}: no cash")
                 continue
-        why = check_entry(c.symbol, qty, est_fill, c.stop, c.target, equity, risk, inst)
-        if c.date.date() < expected:  # the data feed missed a bar: don't act on old prices
-            why.insert(0, f"stale signal from {c.date.date()}, expected {expected}")
+        why = check_entry(c.symbol, qty, est_fill, c.stop, c.target, equity, risk, inst, room)
         if why:
             log.append(f"BLOCK {c.symbol} {c.setup}: " + "; ".join(why))
             continue
@@ -251,9 +302,9 @@ def _enter(conn, broker: PaperBroker, p, rules: Rules, risk: Risk, bars, costs: 
         conn.execute(
             "UPDATE orders SET intent_json = %s WHERE id = %s",
             (Jsonb({
-                "stop": c.stop, "target": c.target, "ref_price": c.ref_price, "setup": c.setup,
-                "signal_date": str(c.date.date()), "rule_version": p["strategy_version"],
-                "bracket": group, "signal": c.reasoning,
+                "stop": c.stop, "target": c.target, "ref_price": c.ref_price, "open": px,
+                "setup": c.setup, "signal_date": str(c.date.date()),
+                "rule_version": p["strategy_version"], "bracket": group, "signal": c.reasoning,
             }), buy),
         )
         broker.submit(c.symbol, "sell", qty, "stop", stop_price=c.stop, oco_group=group, at=now)
@@ -263,9 +314,10 @@ def _enter(conn, broker: PaperBroker, p, rules: Rules, risk: Risk, bars, costs: 
             free_margin -= qty * inst.margin
         else:
             cash -= qty * est_fill + costs.fee_per_order
+        room -= qty * risk_per_unit
         slots -= 1
-        log.append(f"entry {c.symbol} {c.setup}: buy {qty:.4f} ~{c.ref_price:.2f}, "
-                   f"stop {c.stop:.2f}, target {c.target:.2f}")
+        log.append(f"entry {c.symbol} {c.setup}: buy {qty:.4f} at the {px:.2f} open "
+                   f"(signal close {c.ref_price:.2f}), stop {c.stop:.2f}, target {c.target:.2f}")
 
 
 if __name__ == "__main__":

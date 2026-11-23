@@ -1,8 +1,11 @@
 """Built-in paper broker: simulated fills from daily bars, all state in the `orders` table.
 
 Fill model (same as the backtester):
-- An order becomes eligible on the first bar dated after the NY day it was placed, so an order
-  placed after Monday's close can first fill at Tuesday's open.
+- An order placed before the 16:00 NY close can fill on that day's bar; one placed after it
+  waits for the next bar. So the Trader's evening exits fill at the next open, and its entries,
+  placed after the open from the opening price, fill at that open.
+  ponytail: a paper entry fills at the open however late in the session the run placed it (it
+  only ever reads the opening price, so nothing later leaks in); a live adapter fills at market.
 - market: the open. stop/limit: the open if it gapped through the price, else the price itself if
   the bar's range touched it. Stops are checked before limits on the same bar (conservative).
 - Slippage (bps, against you) on every fill, plus the flat fee per order.
@@ -21,14 +24,14 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Callable
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 
 import pandas as pd
 import psycopg
 
 from sheep.backtest.engine import DEFAULT_COSTS, Costs
 from sheep.common.config import instrument
-from sheep.trader.data import NY, last_final_close, load_bars
+from sheep.trader.data import MARKET_CLOSE, NY, last_final_close, load_bars
 
 _PRIORITY = {"market": 0, "stop": 1, "limit": 2}
 _EPS = 1e-9
@@ -175,7 +178,9 @@ class PaperBroker:
         """
         by_symbol: dict[str, list[dict]] = defaultdict(list)
         for o in self.open_orders():
-            o["placed"] = o["created_at"].astimezone(NY).date()
+            at = o["created_at"].astimezone(NY)
+            # "placed": the last day whose bar the order can't trade
+            o["placed"] = at.date() - timedelta(days=1) if at.time() < MARKET_CLOSE else at.date()
             by_symbol[o["symbol"]].append(o)
 
         filled = []

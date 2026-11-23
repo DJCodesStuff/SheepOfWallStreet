@@ -5,7 +5,8 @@ Mirrors live behaviour: signals at day t's close (strategy.pick), orders fill at
 - Exits: a gap through stop/target fills at the open. Otherwise, if a bar touches both stop and
   target, the stop is assumed to hit first (conservative). Trend break exits at the next open.
 - Sizing: risk `risk_per_trade_pct` of equity between fill and stop, capped by cash (no leverage).
-- Risk gate: each entry must pass sheep/trader/risk.py at its actual fill, as in the Trader.
+- Risk gate: each entry must pass sheep/trader/risk.py at its actual fill, as in the Trader,
+  including the weekly loss room left after every open position's stop.
 
     uv run python -m sheep.backtest.engine main_paper [--versions v1 v2_candidate] [--holdout]
 """
@@ -117,6 +118,11 @@ def run(
         today = {s: sig.loc[d] for s, sig in sigs.items() if d in sig.index}
         if (wk := d.isocalendar()[:2]) != week:
             week, week_start_eq = wk, prev_eq
+        # What can still be lost this week once every open stop fills (as the Trader sees it
+        # at the open: yesterday's marks, before today's exits)
+        room = prev_eq - week_start_eq * (1 - risk.weekly_loss_limit_pct / 100) - sum(
+            max(0.0, last_close[s] - p.stop) * p.qty * inst[s].multiplier
+            for s, p in positions.items())
 
         # 1. at the open: queued exits, futures rolls, then queued entries
         for s in [s for s in exits if s in today and s in positions]:
@@ -148,8 +154,10 @@ def run(
                 qty = math.floor(min(qty, (prev_eq - in_use) / i.margin))
             else:
                 qty = min(qty, (cash - costs.fee_per_order) / fill)
-            if qty <= 0 or check_entry(c.symbol, qty, fill, c.stop, c.target, prev_eq, risk, i):
+            if qty <= 0 or check_entry(c.symbol, qty, fill, c.stop, c.target, prev_eq, risk, i,
+                                       room):
                 continue
+            room -= qty * i.multiplier * (fill - c.stop)
             f = fee(c.symbol, qty)
             cash -= f + (0 if i.is_future else qty * fill)
             positions[c.symbol] = _Pos(c.symbol, c.setup, d, fill, qty, c.stop, c.stop,
@@ -178,8 +186,7 @@ def run(
                     exits.add(s)
         last_close.update({s: row["close"] for s, row in today.items()})
         prev_eq = equity[d] = cash + sum(value(p, last_close[s]) for s, p in positions.items())
-        weekly_limit_hit = prev_eq < week_start_eq * (1 - risk.weekly_loss_limit_pct / 100)
-        entries = [] if weekly_limit_hit else pick(today, rules)
+        entries = pick(today, rules)  # the weekly loss limit is checked at the open (room)
         prev_day = d
 
     if days:  # flatten at the end so every trade is closed and costed

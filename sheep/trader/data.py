@@ -16,8 +16,23 @@ from sheep.common.config import ROOT, SYMBOL_RE
 
 DATA_DIR = ROOT / "data"
 NY = ZoneInfo("America/New_York")
+MARKET_OPEN, MARKET_CLOSE = time(9, 30), time(16)
 BAR_FINAL_AT = time(16, 30)  # treat a daily bar as final 30 min after the 16:00 close
 COLUMNS = ["open", "high", "low", "close", "volume"]
+
+
+def today_open(symbol: str, now: datetime | None = None) -> float | None:
+    """Today's opening price, or None before the open or on a day with no session."""
+    import yfinance as yf
+
+    now = (now or datetime.now(NY)).astimezone(NY)
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", module="yfinance")
+        df = yf.Ticker(symbol).history(period="5d", interval="1d", auto_adjust=True)
+    if df.empty or df.index[-1].date() != now.date():
+        return None
+    px = float(df["Open"].iloc[-1])
+    return px if px > 0 else None  # also rejects NaN
 
 
 def last_final_close(now: datetime) -> datetime:

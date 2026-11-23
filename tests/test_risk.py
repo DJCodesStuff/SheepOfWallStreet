@@ -29,6 +29,12 @@ def test_entry_blocked(qty, stop, target, risk, reason):
     assert any(reason in w for w in why), why
 
 
+def test_weekly_room_blocks_entry():
+    why = check_entry("X", 0.5, 100, 98, 104, 100, RISK, EQUITY, room=0.5)
+    assert any("weekly loss limit" in w for w in why), why
+    assert check_entry("X", 0.5, 100, 98, 104, 100, RISK, EQUITY, room=1.5) == []
+
+
 def test_backtest_applies_the_gate():
     bars = rising_then_drop()
     assert len(run(bars, RULES, RISK, 100, NO_COSTS).trades) >= 1
@@ -39,8 +45,9 @@ def test_trader_blocks_stale_signal(db):
     sync_rule_versions(db, {"t": RULES.__dict__})
     sync_profiles(db, {"t": Profile("t", "paper", "paper", 100.0, "t", ("X",), RISK)})
     df = rising_then_drop()["X"]
-    d = df.index[10]
-    now = datetime.combine(d.date(), time(18), NY)
-    log = run_profile(db, "t", NO_COSTS, bars_fn=lambda s: df.loc[:df.index[9]], now=now)
+    d = df.index[11]  # the open run after a day whose bar (index 10) the feed missed
+    now = datetime.combine(d.date(), time(10), NY)
+    log = run_profile(db, "t", NO_COSTS, bars_fn=lambda s: df.loc[:df.index[9]],
+                      open_fn=lambda s, now: df.loc[d, "open"], now=now)
     assert any(line.startswith("BLOCK X breakout: stale signal") for line in log), log
     assert db.execute("SELECT count(*) AS n FROM orders").fetchone()["n"] == 0

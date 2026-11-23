@@ -79,7 +79,8 @@ SheepOfWallStreet/
 
 ### Part 1: Trader (makes the calls)
 
-- Scans the watchlist after the close and applies the rules
+- Scans the watchlist after the close and applies the rules; enters after the next open,
+  sized at the actual opening price
 - Sizes positions, sets stop-loss and target at entry
 - Sends orders through the broker interface (paper or live)
 - Logs every decision with its reasoning: signal values, entry, stop, target, rule version, profile
@@ -190,7 +191,7 @@ profiles:
 - Enter only trades matching a written setup
 
 **Tuesday to Thursday: execute and manage**
-- One scan per day after the close, orders placed for the next day
+- One scan per day after the close; entries placed after the next open, at its price
 - Every position has a stop-loss and a target
 - No new setups once weekly limits are hit
 
@@ -261,6 +262,6 @@ profiles:
 ## Open Questions
 
 - Final watchlist (ETF-only or include individual stocks)?
-- Fill model for paper trading: next open vs. close?
+- ~~Fill model for paper trading: next open vs. close?~~ Next open (see DECISIONS.md)
 - Alert channel for signals and weekly reports (email, Telegram, none)?
 - Dashboard only, or also a CLI?

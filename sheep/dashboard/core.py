@@ -33,8 +33,9 @@ HELP = {
                 "if winners are bigger than losers.",
     "expectancy": "Average profit or loss per closed trade, after costs.",
     "equity_curve": "Equity at each evening's close, recorded by the Trader's daily run.",
-    "open_orders": "Orders waiting to fill: entries for the next open, and each trade's "
-                   "stop and target.",
+    "open_orders": "Orders waiting to fill: each trade's stop and target, exits queued for "
+                   "the next open, and entries placed at today's open (filled by the evening "
+                   "run).",
     "setup": "Why the trade was entered. Breakout: closed above the recent high. "
              "Pullback: dipped (low RSI) while in an uptrend.",
     "symbol": "Ticker of the stock or ETF.",
@@ -73,8 +74,9 @@ HELP = {
     "spy": "The benchmark: buying SPY at the start and holding it, with the same costs. "
            "The project rule is not to trade a strategy live unless it beats this.",
     "year_by_year": "Each test window, the rule version it traded, and how it did.",
-    "run_trader": "The daily cycle: fill pending orders against the new bar, record exits, "
-                  "raise trailing stops, and place new entries with their stop and target.",
+    "run_trader": "During the session: size and place new entries at today's opening price, "
+                  "each with its stop and target. In the evening: fill pending orders against "
+                  "the new bar, record exits and raise trailing stops.",
     "clone": "Copy this profile's settings into a new, empty paper profile, e.g. to compare "
              "rule versions from identical starting conditions.",
     "new_profile": "Start a separate paper account with its own money and settings.",
