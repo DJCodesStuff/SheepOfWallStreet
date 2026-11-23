@@ -1,14 +1,15 @@
 """The Trader, per profile. It runs twice a weekday; which run it is depends on the NY time:
 
-- evening (after 16:30, once the day's bar is final; also weekends):
+- evening (after 16:30, once the day's bar is final; any hour on weekends and NYSE holidays):
   1. refresh the broker (fill/reject pending orders against the new bar)
   2. reconcile: entry fills open trades, exit fills close them (pnl, exit reason)
   3. manage open trades: trend break -> exit at next open; futures held over a roll date ->
      roll (sell + buy) at the next open; else ratchet the trailing stop
   4. log tonight's signals, snapshot equity
-- open (09:30-16:00): steps 1-3 again (a no-op after a normal evening; catches up a missed one),
-  then enter: re-scan yesterday's final bars, read today's opening price, size each entry at it
-  (so the stop risks exactly risk_per_trade_pct even after a gap) and pass it through the risk
+- open (09:30-16:00 on trading days): steps 1-3 again (a no-op after a normal evening;
+  catches up a missed one), then enter: re-scan the previous session's final bars, read
+  today's opening price, size each entry at it (so the stop risks exactly
+  risk_per_trade_pct even after a gap) and pass it through the risk
   gate (sheep/trader/risk.py). Each entry is a bracket: market buy + OCO stop/target sells,
   filled at today's open. This is what the backtester does, so the two agree.
 
@@ -36,8 +37,10 @@ from sheep.trader.data import (
     MARKET_CLOSE,
     MARKET_OPEN,
     NY,
+    is_session,
     last_final_close,
     load_bars,
+    prev_session,
     today_open,
 )
 from sheep.trader.risk import check_entry
@@ -57,11 +60,11 @@ def run_profile(
 ) -> list[str]:
     """Run one profile's open or evening run (see module doc). Returns a log of decisions."""
     now = (now or datetime.now(NY)).astimezone(NY)
-    weekday = now.weekday() < 5
-    at_open = weekday and MARKET_OPEN <= now.time() < MARKET_CLOSE
-    if weekday and not at_open and now.time() < BAR_FINAL_AT:
-        return [f"skipped: entries run {MARKET_OPEN:%H:%M}-{MARKET_CLOSE:%H:%M} NY on weekdays, "
-                f"fills and exits after {BAR_FINAL_AT:%H:%M}"]
+    session = is_session(now.date())  # weekends and NYSE holidays: evening run at any hour
+    at_open = session and MARKET_OPEN <= now.time() < MARKET_CLOSE
+    if session and not at_open and now.time() < BAR_FINAL_AT:
+        return [f"skipped: entries run {MARKET_OPEN:%H:%M}-{MARKET_CLOSE:%H:%M} NY on trading "
+                f"days, fills and exits after {BAR_FINAL_AT:%H:%M}"]
     p = conn.execute("SELECT * FROM profiles WHERE name = %s", (name,)).fetchone()
     if p is None:
         raise ValueError(f"unknown profile: {name}")
@@ -216,9 +219,7 @@ def _enter(conn, broker: PaperBroker, p, rules: Rules, risk: Risk, bars, watch, 
 
     equity = broker.equity()  # positions marked at yesterday's close
     today = now.date()
-    # Signals come from the previous weekday's close. ponytail: no holiday calendar, so the
-    # morning after a market holiday reads every signal as stale and enters nothing.
-    expected = today - timedelta(days=3 if today.weekday() == 0 else 1)
+    expected = prev_session(today)  # signals come from the previous trading day's close
     monday = today - timedelta(days=today.weekday())
     row = conn.execute(
         "SELECT equity FROM equity_snapshots WHERE profile_id = %s AND date < %s "

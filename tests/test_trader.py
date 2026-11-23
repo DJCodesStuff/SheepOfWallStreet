@@ -1,6 +1,7 @@
 from dataclasses import replace
 from datetime import datetime, time
 
+import pandas as pd
 import pytest
 
 from sheep.backtest.engine import Costs, run
@@ -107,6 +108,17 @@ def test_no_opening_price_skips_entry(db):
                       open_fn=lambda s, now: None, now=datetime.combine(d.date(), time(10), NY))
     assert any("no opening price" in line for line in log), log
     assert db.execute("SELECT count(*) AS n FROM orders").fetchone()["n"] == 0
+
+
+def test_holiday_enters_nothing_and_next_session_uses_pre_holiday_signal(db):
+    df = rising_then_drop(start="2026-01-02")["X"]  # sessions skip Mon Jan 19 (MLK day)
+    setup_profile(db, {"X": df})
+    fri = pd.Timestamp("2026-01-16")
+    kw = dict(bars_fn=lambda s: df.loc[:fri], open_fn=lambda s, now: df.loc[fri, "open"])
+    mlk = run_profile(db, "t", NO_COSTS, now=datetime(2026, 1, 19, 10, tzinfo=NY), **kw)
+    assert not any(line.startswith("entry") for line in mlk), mlk
+    tue = run_profile(db, "t", NO_COSTS, now=datetime(2026, 1, 20, 10, tzinfo=NY), **kw)
+    assert any(line.startswith("entry X") for line in tue), tue  # Friday's signal isn't stale
 
 
 def test_trailing_stop_ratchets_open_trade(db):

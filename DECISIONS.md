@@ -22,11 +22,27 @@ Each entry: what was decided, what was rejected, and what it costs.
   still drift from the backtester.
 - **Cost:** A paper entry fills at the open even when the run happens later (GitHub can start
   cron jobs an hour late). The run only ever reads the opening price, so nothing later leaks
-  in, but a live adapter will fill at market instead and must model that. The morning after a
-  market holiday enters nothing (no holiday calendar: signals read as stale). The open run
+  in, but a live adapter will fill at market instead and must model that. The open run
   makes one yfinance request per candidate. A symbol whose opening price can't be fetched is
   skipped for the day. The project's lifecycle note "Monday: skip the open" now applies only
   to manual trading; the bot enters on Mondays too.
+
+## NYSE holiday calendar from pandas' holiday rules (2026-11-23)
+
+- **Decided:** `NYSEHolidays` in `sheep/trader/data.py` defines NYSE full-day closures with
+  pandas' built-in holiday rules. These cover New Year's Day (Sunday moves to Monday, and
+  there's no Friday Dec 31 closure), MLK, Presidents, Good Friday, Memorial, Juneteenth (from
+  2022), Independence Day, Labor, Thanksgiving and Christmas (Saturday moves to Friday,
+  Sunday to Monday). The Trader treats a holiday like a weekend: no open run, and the evening
+  run can happen at any hour. The stale-signal check expects the previous *trading* day, so
+  the morning after a holiday acts on the pre-holiday close instead of calling it stale.
+  `last_final_close` steps back to the last session, so a weekend or holiday no longer causes
+  a needless data refetch or a holiday-dated equity snapshot. Test bars now use NYSE sessions.
+- **Rejected:** `pandas_market_calendars` / `exchange_calendars`. They're more complete but add
+  a dependency for 10 stable rules.
+- **Cost:** One-off closures (national days of mourning, weather) aren't known and must be
+  added by hand when announced. If one is missed, the open run finds no opening price and
+  skips each candidate, which is harmless. Early 13:00 closes count as full sessions.
 
 ## Open risk across positions is capped by the weekly loss limit (2026-11-23)
 
@@ -43,6 +59,10 @@ Each entry: what was decided, what was rejected, and what it costs.
   resizes, as it did before.
 - **Cost:** Fewer entries in a losing week, and a second same-day entry is often blocked when
   the limit is tight. Gaps through stops can still exceed the limit; this caps planned risk only.
+- **Live action (2026-11-23):** At the user's request, main_paper's pending XLF bracket (orders
+  41-43, placed 2026-11-20 under the old close-based sizing) was cancelled before it could
+  fill. At the 55.57 open it would have risked about $1.45 (1.5%), and the new gate would
+  have blocked it (reward:risk 0.99 < 1.0).
 
 ## Open positions are marked at the latest final daily close (2026-11-23)
 

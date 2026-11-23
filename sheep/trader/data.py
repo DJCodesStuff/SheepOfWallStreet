@@ -6,11 +6,24 @@ Run `python -m sheep.trader.data` to warm the cache for every profile's watchlis
 from __future__ import annotations
 
 import warnings
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
+from functools import cache
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+from pandas.tseries.holiday import (
+    AbstractHolidayCalendar,
+    GoodFriday,
+    Holiday,
+    USLaborDay,
+    USMartinLutherKingJr,
+    USMemorialDay,
+    USPresidentsDay,
+    USThanksgivingDay,
+    nearest_workday,
+    sunday_to_monday,
+)
 
 from sheep.common.config import ROOT, SYMBOL_RE
 
@@ -19,6 +32,44 @@ NY = ZoneInfo("America/New_York")
 MARKET_OPEN, MARKET_CLOSE = time(9, 30), time(16)
 BAR_FINAL_AT = time(16, 30)  # treat a daily bar as final 30 min after the 16:00 close
 COLUMNS = ["open", "high", "low", "close", "volume"]
+
+
+class NYSEHolidays(AbstractHolidayCalendar):
+    """NYSE full-day closures. A Saturday holiday closes the Friday before, a Sunday one the
+    Monday after, except New Year's Day: the NYSE stays open on a Friday Dec 31.
+
+    ponytail: no one-off closures (e.g. national days of mourning, announced days ahead); add
+    them as Holiday(name, year=, month=, day=) when announced. Early 13:00 closes count as
+    full sessions.
+    """
+
+    rules = [
+        Holiday("New Year's Day", month=1, day=1, observance=sunday_to_monday),
+        USMartinLutherKingJr, USPresidentsDay, GoodFriday, USMemorialDay,
+        Holiday("Juneteenth", month=6, day=19, start_date="2022-01-01",
+                observance=nearest_workday),
+        Holiday("Independence Day", month=7, day=4, observance=nearest_workday),
+        USLaborDay, USThanksgivingDay,
+        Holiday("Christmas Day", month=12, day=25, observance=nearest_workday),
+    ]
+
+
+@cache
+def _holidays(year: int) -> frozenset[date]:
+    return frozenset(NYSEHolidays().holidays(f"{year}-01-01", f"{year}-12-31").date)
+
+
+def is_session(d: date) -> bool:
+    """True if the NYSE trades on day d."""
+    return d.weekday() < 5 and d not in _holidays(d.year)
+
+
+def prev_session(d: date) -> date:
+    """The last trading day before d."""
+    d -= timedelta(days=1)
+    while not is_session(d):
+        d -= timedelta(days=1)
+    return d
 
 
 def today_open(symbol: str, now: datetime | None = None) -> float | None:
@@ -36,13 +87,12 @@ def today_open(symbol: str, now: datetime | None = None) -> float | None:
 
 
 def last_final_close(now: datetime) -> datetime:
-    """Most recent moment a daily bar became final. Bars after this date are partial.
-
-    ponytail: ignores weekends/holidays; worst case is one unneeded refetch on a non-trading day.
-    """
+    """Most recent moment a session's daily bar became final. Bars after this date are partial."""
     now = now.astimezone(NY)
-    cutoff = datetime.combine(now.date(), BAR_FINAL_AT, NY)
-    return cutoff if now >= cutoff else cutoff - timedelta(days=1)
+    d = now.date()
+    if not (is_session(d) and now.time() >= BAR_FINAL_AT):
+        d = prev_session(d)
+    return datetime.combine(d, BAR_FINAL_AT, NY)
 
 
 def _fetch(symbol: str) -> pd.DataFrame:

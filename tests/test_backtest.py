@@ -1,9 +1,11 @@
 import numpy as np
 import pandas as pd
 import pytest
+from pandas.tseries.offsets import CustomBusinessDay
 
 from sheep.backtest.engine import Costs, holdout_cutoff, run, walk_forward
 from sheep.common.config import Risk
+from sheep.trader.data import NYSEHolidays
 from sheep.trader.strategy import Rules
 
 RULES = Rules(
@@ -22,7 +24,8 @@ def rising_then_drop(n=30, drop_at=20, gap=False, start="2026-01-05", symbol="X"
     if gap:
         open_[drop_at] = close[drop_at]
     high, low = np.maximum(open_, close) * 1.005, np.minimum(open_, close) * 0.995
-    idx = pd.bdate_range(start, periods=n, name="date")
+    idx = pd.date_range(start, periods=n, freq=CustomBusinessDay(calendar=NYSEHolidays()),
+                        name="date")  # real sessions: the Trader skips NYSE holidays
     return {symbol: pd.DataFrame(
         {"open": open_, "high": high, "low": low, "close": close, "volume": 1e6}, index=idx
     )}
