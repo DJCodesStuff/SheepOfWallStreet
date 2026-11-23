@@ -9,9 +9,9 @@ import pandas as pd
 import streamlit as st
 
 from sheep.backtest.engine import Costs, buy_hold, stats, walk_forward
-from sheep.common.config import Risk
+from sheep.common.config import Risk, instrument
 from sheep.common.db import connect
-from sheep.trader.data import load_bars
+from sheep.trader.data import NY, load_bars
 from sheep.trader.strategy import Rules
 
 ss = st.session_state
@@ -134,6 +134,19 @@ HELP = {
     "tm_history": "Every past day this rule version's setup fired on this symbol (ignoring the "
                   "watchlist momentum rank), traded from the next open with the same stop, "
                   "target and holding period. What really happened, not a simulation.",
+    "close": "Latest final daily close: what open positions and equity are valued at.",
+    "sessions": "Trading days held, counting the day the entry filled.",
+    "open_pnl": "Profit or loss if sold at the latest close, before exit slippage and fees.",
+    "open_pct": "Latest close against the entry price.",
+    "open_r": "Open profit or loss in units of the risk taken at entry (entry minus the "
+              "original stop). +1R is up as much as the trade risked.",
+    "if_stopped": "Profit or loss if the stop in force now fills exactly. Positive once the "
+                  "trailing stop is above the entry: that much is locked in. A gap down at "
+                  "the open can fill worse.",
+    "to_stop": "How far the price can fall from the latest close before the stop triggers.",
+    "to_target": "How far the price has to rise from the latest close to reach the target.",
+    "progress": "Where the latest close sits between the stop in force (0%) and the target "
+                "(100%).",
     "reset": "Deletes the profile's orders, trades and equity history, and starts again "
              "from its starting capital.",
 }
@@ -193,6 +206,16 @@ COLUMNS = {
     "trades": st.column_config.NumberColumn(help=HELP["closed_trades"]),
     "win_rate": num("win_rate", "win rate", "percent"),
     "total_pnl": num("total_pnl", "total P&L"), "avg_r": num("avg_r", "avg R", "%+.2f"),
+    "close": num("close", "last close"),
+    "sessions": st.column_config.NumberColumn("days", help=HELP["sessions"]),
+    "open_pnl": num("open_pnl", "open P&L", "$%+.2f"),
+    "open_pct": num("open_pct", "vs entry", "percent"),
+    "open_r": num("open_r", "open R", "%+.2f"),
+    "if_stopped": num("if_stopped", "P&L if stopped", "$%+.2f"),
+    "to_stop": num("to_stop", "to stop", "percent"),
+    "to_target": num("to_target", "to target", "percent"),
+    "progress": st.column_config.ProgressColumn("stop → target", help=HELP["progress"],
+                                                format="percent", min_value=0, max_value=1),
 }
 
 
@@ -252,6 +275,40 @@ def split_trades(trades: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     closed = closed.assign(r=closed["pnl"] / (closed["qty"] * (closed["entry_price"]
                                                                 - closed["stop"])))
     return trades[trades["exit_ts"].isna()], closed
+
+
+MARKS = ["close", "as_of", "sessions", "open_pnl", "open_pct", "open_r", "if_stopped",
+         "to_stop", "to_target", "progress"]
+
+
+@st.cache_data(ttl=300, show_spinner="Valuing open positions…")
+def mark(open_: pd.DataFrame) -> pd.DataFrame:
+    """Open trades plus MARKS: each valued at its symbol's latest final close.
+
+    A symbol whose bars can't load gets blank MARKS instead of breaking the page.
+    """
+    rows = []
+    for t in open_.itertuples():
+        try:
+            c = load_bars(t.symbol)["close"]
+        except Exception:  # noqa: BLE001 - network/data errors: leave this row blank
+            rows.append({})
+            continue
+        close, mult = float(c.iloc[-1]), instrument(t.symbol).multiplier
+        stop = t.current_stop if pd.notna(t.current_stop) else t.stop
+        rows.append({
+            "close": close, "as_of": c.index[-1].date(),
+            "sessions": int((c.index.date >= pd.Timestamp(t.entry_ts).tz_convert(NY).date())
+                            .sum()),
+            "open_pnl": (close - t.entry_price) * t.qty * mult,
+            "open_pct": close / t.entry_price - 1,
+            "open_r": (close - t.entry_price) / (t.entry_price - t.stop),
+            "if_stopped": (stop - t.entry_price) * t.qty * mult,
+            "to_stop": stop / close - 1,
+            "to_target": t.target / close - 1,
+            "progress": min(max((close - stop) / (t.target - stop), 0.0), 1.0),
+        })
+    return pd.concat([open_, pd.DataFrame(rows, index=open_.index, columns=MARKS)], axis=1)
 
 
 def write(fn):

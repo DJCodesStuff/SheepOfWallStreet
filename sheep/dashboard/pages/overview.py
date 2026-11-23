@@ -1,6 +1,11 @@
+import altair as alt
+import pandas as pd
 import streamlit as st
 
-from sheep.dashboard.core import HELP, cols, current, load, num, split_trades, when
+from sheep.dashboard.core import HELP, cols, current, load, mark, num, split_trades, when
+from sheep.trader.data import NY, load_bars
+
+HUE = "#3b6fd4"
 
 p = current()
 d = load(p.name)
@@ -39,9 +44,53 @@ else:
 
 st.subheader("Open positions", help=HELP["open_positions"])
 if len(open_):
-    view = open_[["symbol", "setup", "entry_ts", "entry_price", "qty", "stop", "current_stop",
-                  "target"]]
+    m = mark(open_)
+    with st.container(horizontal=True):
+        st.metric("Open P&L", f"${m['open_pnl'].sum():+,.2f}",
+                  f"{m['open_pnl'].sum() / equity:+.2%} of equity", border=True,
+                  help=HELP["open_pnl"])
+        st.metric("If every stop fills", f"${m['if_stopped'].sum():+,.2f}",
+                  f"{m['if_stopped'].sum() / equity:+.2%} of equity", border=True,
+                  help=HELP["if_stopped"])
+    if m["close"].isna().any():
+        st.warning("Couldn't load prices for " + ", ".join(m[m["close"].isna()]["symbol"]))
+    view = m[["symbol", "setup", "sessions", "qty", "entry_price", "close", "open_pnl",
+              "open_pct", "open_r", "current_stop", "to_stop", "target", "to_target",
+              "progress", "if_stopped"]]
     st.dataframe(view, hide_index=True, column_config=cols(view))
+    st.caption(f"Valued at the {m['as_of'].max()} close.")
+
+    for tab, t in zip(st.tabs(list(m["symbol"])), m.itertuples(), strict=True):
+        with tab:
+            entered = pd.Timestamp(t.entry_ts).tz_convert(NY).tz_localize(None).normalize()
+            try:
+                c = load_bars(t.symbol)["close"]
+            except Exception as e:  # noqa: BLE001 - network/data errors shown in the UI
+                st.caption(f"No chart: {e}")
+                continue
+            c = c[c.index >= entered - pd.Timedelta(days=30)].rename("close")
+            stop = t.current_stop if pd.notna(t.current_stop) else t.stop
+            levels = pd.DataFrame({
+                "label": [f"target {t.target:.2f}", f"entry {t.entry_price:.2f}",
+                          f"stop now {stop:.2f}"] + (
+                    [f"stop at entry {t.stop:.2f}"] if stop != t.stop else []),
+                "price": [t.target, t.entry_price, stop] + ([t.stop] if stop != t.stop else []),
+            })
+            line = alt.Chart(c.reset_index()).mark_line(color=HUE, strokeWidth=2).encode(
+                x=alt.X("date:T", title=None),
+                y=alt.Y("close:Q", title="Close", scale=alt.Scale(zero=False)),
+                tooltip=[alt.Tooltip("date:T", format="%a %d %b"),
+                         alt.Tooltip("close:Q", format="$.2f")])
+            st.altair_chart(alt.layer(
+                line,
+                alt.Chart(levels).mark_rule(color="gray", strokeDash=[4, 4]).encode(y="price:Q"),
+                alt.Chart(levels).mark_text(color="gray", align="left", dx=4, dy=-6).encode(
+                    x=alt.value(0), y="price:Q", text="label:N"),
+                alt.Chart(pd.DataFrame({"date": [entered]})).mark_rule(color="gray").encode(
+                    x="date:T"),
+            ).properties(height=260))
+            st.caption(f"Entered {entered.date()} on a {t.setup} setup "
+                       f"({t.sessions} trading days ago). Solid vertical line: entry day.")
 else:
     st.caption("No open positions.")
 
