@@ -171,6 +171,9 @@ PARAMS = {
     "breakout_lookback_days": ("Breakout lookback (days)",
                                "Buy when the close beats the highest high of the previous N "
                                "days."),
+    "breakout_rsi_max": ("Breakout: RSI at most",
+                         "Skip a breakout when RSI is above this: the move is already "
+                         "overextended and tends to snap back. 100 turns the check off."),
     "atr_period": ("ATR period (days)",
                    "Days used for ATR, the average daily price range (volatility)."),
     "atr_stop_mult": ("Stop distance (× ATR)",

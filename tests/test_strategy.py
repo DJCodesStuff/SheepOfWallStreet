@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 
 import numpy as np
 import pandas as pd
@@ -97,3 +98,9 @@ def test_validate_rules_accepts_config_versions():
 
     for params in load_strategies().values():
         validate_rules(params)
+
+
+def test_breakout_rsi_max_skips_overextended_breakouts():
+    universe = {"STRONG": bars(0.004, last_jump=1.05)}  # steady climb: RSI pinned near 100
+    assert scan(universe, RULES)  # default 100 = off: v1 behaviour unchanged
+    assert not scan(universe, replace(RULES, breakout_rsi_max=70))

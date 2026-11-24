@@ -4,7 +4,7 @@ profiles:
     broker: paper
     starting_capital: 100
     currency: USD
-    strategy_version: v1
+    strategy_version: v1_1
     watchlist: [SPY, QQQ, IWM, XLK, XLF, XLE, XLV]
     risk:
       risk_per_trade_pct: 1.0

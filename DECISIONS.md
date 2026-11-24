@@ -77,3 +77,34 @@ Each entry: what was decided, what was rejected, and what it costs.
 - **Cost:** Marks lag intraday moves by up to a session. Open P&L is slightly optimistic
   (before exit costs), and "if stopped" assumes an exact fill: a gap down fills worse. A
   symbol whose bars fail to load shows blank marks and a warning rather than breaking the page.
+
+## Base rules v1_1: no breakout entries above RSI 70 (2026-11-24)
+
+- **Decided:** New rule version `v1_1` = v1 plus `breakout_rsi_max: 70`: a breakout only counts
+  when RSI(14) is at most 70. Pullback entries, stops and targets are unchanged. main_paper
+  moves from v1 to v1_1. live_small stays on v1 until v1_1 has a paper record (feedback loop
+  step 4). The new setting defaults to 100 (off), so v1 and v2_candidate trade exactly as before.
+- **Why (live):** main_paper's first five days lost 3.05%. Both trades were v1 breakouts
+  bought overextended: XLV at RSI 77, 20% above its 200-day MA, and XLF at RSI 71. Both
+  stopped out within 1-2 days. Five trades are far below the 20-trade minimum, so the rule was
+  adopted on backtest evidence, not on these trades.
+- **Why (backtest):** Walk-forward on main_paper's watchlist, test windows 1997-01 to 2024-01,
+  5 bps slippage. v1: 674 trades, Sharpe 0.40, +91%, max DD -21%. v1_1: 554 trades, Sharpe 0.53,
+  +121%, max DD -21%, avg R 0.11 -> 0.15. Caps of 65-80 all beat v1, so 70 is not a lone spike
+  (60 is too tight: Sharpe 0.39). On SPY/QQQ only, Sharpe goes 0.44 -> 0.52 and DD -18% -> -14%.
+- **Holdout check (run once, 2024-11-23 onward):** no difference. v1 and v1_1 both returned
+  +0.1% (Sharpe 0.04) while SPY buy-and-hold made +23.6% (Sharpe 0.70). Neither version beats
+  SPY over the walk-forward period either (SPY Sharpe 0.53, +912%), so per the testing rules
+  this is still a paper-only strategy.
+- **Rejected (tested, not adopted):** A momentum floor (skip a top-ranked symbol whose own
+  lookback return is negative). It would have blocked experiment_momentum_fast's three losing
+  SPY pullbacks (momentum -2% to -5%), but it cut v2_candidate's Sharpe from 0.44 to 0.35:
+  negative-momentum dips in SPY/QQQ have historically paid off, so those losses read as bad
+  luck. A trend buffer (close at least 0.5-1 ATR above the 200-day MA, since two SPY entries
+  sat 0.4-0.8% above it and one exited on a trend break 2 days later). It cut drawdown at 1 ATR
+  (-21% -> -13%) but lowered return and Sharpe.
+- **Cost:** About 18% fewer trades. Strong trends that keep running with RSI above 70 are missed.
+  The dashboard shows versions saved without the setting as 100 (off).
+- **Live action (2026-11-24):** `python -m sheep.common.db` was run against Neon, inserting
+  rule version v1_1 and switching main_paper to it (no open trades or pending orders at the time).
+  The next scheduled Trader run is the first on v1_1.

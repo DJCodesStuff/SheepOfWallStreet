@@ -1,3 +1,5 @@
+from dataclasses import MISSING, fields
+
 import pandas as pd
 import psycopg
 import streamlit as st
@@ -14,7 +16,7 @@ from sheep.dashboard.core import (
     write,
 )
 from sheep.profiles.manage import create_rule_version, set_rule_version
-from sheep.trader.strategy import RULE_BOUNDS
+from sheep.trader.strategy import RULE_BOUNDS, Rules
 
 data = load()
 vers, profiles = data["versions"], data["profiles"]
@@ -30,7 +32,8 @@ show_flash()
 # --- compare ----------------------------------------------------------------------------------
 st.subheader("Compare", help="Every saved version side by side. Settings that differ between "
                              "versions are in bold.")
-table = pd.DataFrame(params).reindex(list(RULE_BOUNDS))
+defaults = {f.name: f.default for f in fields(Rules) if f.default is not MISSING}
+table = pd.DataFrame({v: defaults | p for v, p in params.items()}).reindex(list(RULE_BOUNDS))
 table.index = [PARAMS[k][0] for k in table.index]
 styled = table.style.format("{:g}", na_rep="–").apply(
     lambda row: ["font-weight: bold" if row.nunique() > 1 else ""] * len(row), axis=1)
@@ -60,7 +63,7 @@ st.subheader("Create a version", help="Start from an existing version, adjust it
 with st.container(border=True):
     base = st.selectbox("Start from", names, index=names.index(current()["strategy_version"]),
                         help="Its settings are filled in below for you to adjust.")
-    bp = params[base]
+    bp = defaults | params[base]
     with st.form("new_rule", border=False):
         new_name = st.text_input("New version name", placeholder=f"{base}_wide_stop",
                                  help="1-64 letters, digits, _ or -. Can't be renamed later.")

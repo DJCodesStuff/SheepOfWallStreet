@@ -11,6 +11,20 @@ versions:
     atr_stop_mult: 2.0
     target_r_multiple: 2.0
 
+  # v1 + no breakouts above RSI 70. v1's first live breakouts (XLV RSI 77, XLF RSI 71) were
+  # bought overextended and stopped out in 1-2 days. Walk-forward 1997-2024: Sharpe 0.40 -> 0.53.
+  v1_1:
+    trend_ma_days: 200
+    momentum_lookback_days: 126
+    top_n: 2
+    rsi_period: 14
+    rsi_entry_below: 40
+    breakout_lookback_days: 20
+    breakout_rsi_max: 70
+    atr_period: 14
+    atr_stop_mult: 2.0
+    target_r_multiple: 2.0
+
   v2_candidate:
     trend_ma_days: 200
     momentum_lookback_days: 63    # ~3 months

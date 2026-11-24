@@ -25,6 +25,9 @@ class Rules:
     atr_period: int
     atr_stop_mult: float
     target_r_multiple: float
+    # No breakout entry when RSI is above this: v1's first breakouts were bought overextended
+    # and stopped out within days (DECISIONS.md). 100 = off, as for versions saved without it.
+    breakout_rsi_max: float = 100.0
 
 
 # Allowed range per setting. Int bounds mean the setting must be a whole number.
@@ -38,6 +41,7 @@ RULE_BOUNDS: dict[str, tuple[float, float]] = {
     "atr_period": (2, 100),
     "atr_stop_mult": (0.5, 10.0),
     "target_r_multiple": (0.5, 100.0),
+    "breakout_rsi_max": (0.0, 100.0),
 }
 
 
@@ -108,6 +112,8 @@ def signals(df: pd.DataFrame, r: Rules) -> pd.DataFrame:
     out["trend_ok"] = close > out["sma_trend"]  # NaN (too little history) -> False
     out["pullback"] = out["trend_ok"] & (out["rsi"] < r.rsi_entry_below)
     out["breakout"] = out["trend_ok"] & (close > out["prior_high"])
+    if r.breakout_rsi_max < 100:  # keeps "off" exact even where RSI is NaN
+        out["breakout"] &= out["rsi"] <= r.breakout_rsi_max
     out["trend_break"] = close < out["sma_trend"]  # exit signal for open positions
     return out
 
