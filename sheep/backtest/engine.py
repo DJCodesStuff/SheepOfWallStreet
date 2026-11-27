@@ -6,7 +6,8 @@ Mirrors live behaviour: signals at day t's close (strategy.pick), orders fill at
   target, the stop is assumed to hit first (conservative). Trend break exits at the next open.
 - Sizing: risk `risk_per_trade_pct` of equity between fill and stop, capped by cash (no leverage).
 - Risk gate: each entry must pass sheep/trader/risk.py at its actual fill, as in the Trader,
-  including the weekly loss room left after every open position's stop.
+  including the weekly loss room left after every open position's stop, and then the backtest
+  gate (that symbol's own backtested record for the setup, trades closed before the entry day).
 
     uv run python -m sheep.backtest.engine main_paper [--versions v1 v2_candidate] [--holdout]
 """
@@ -14,13 +15,13 @@ Mirrors live behaviour: signals at day t's close (strategy.pick), orders fill at
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 
 import pandas as pd
 
 from sheep.common.config import Risk, instrument
-from sheep.trader.risk import check_entry
+from sheep.trader.risk import check_entry, track_record
 from sheep.trader.strategy import Rules, pick, signals, trail_stop
 
 
@@ -69,14 +70,21 @@ def run(
     costs: Costs = DEFAULT_COSTS,
     start: pd.Timestamp | None = None,
     end: pd.Timestamp | None = None,
+    history: dict[str, pd.DataFrame] | None = None,
 ) -> Result:
     """Trade days in [start, end). Bars before `start` are used only to warm up indicators.
+
+    `history`: per-symbol symbol_history for the backtest gate, if already computed for these
+    bars and rules (walk_forward reuses it across folds). Computed here when missing.
 
     Futures (see config/instruments.yaml): whole contracts, sized within free margin, P&L times
     the multiplier, no cash paid for the notional, and positions held over a roll date are
     closed and reopened at the next open (paying slippage and fees twice).
     """
     sigs = {s: signals(df, rules).join(df[["open", "high", "low"]]) for s, df in bars.items()}
+    n_gate = risk.backtest_min_trades
+    if n_gate and history is None:
+        history = {s: symbol_history(s, df, rules, risk, costs) for s, df in bars.items()}
     inst = {s: instrument(s) for s in bars}
     days = sorted(set().union(*(sig.index for sig in sigs.values())))
     days = [d for d in days if (start is None or d >= start) and (end is None or d < end)]
@@ -157,6 +165,8 @@ def run(
             if qty <= 0 or check_entry(c.symbol, qty, fill, c.stop, c.target, prev_eq, risk, i,
                                        room):
                 continue
+            if n_gate and track_record(history[c.symbol], c.setup, d, n_gate)[0]:
+                continue  # last, as in the Trader
             room -= qty * i.multiplier * (fill - c.stop)
             f = fee(c.symbol, qty)
             cash -= f + (0 if i.is_future else qty * fill)
@@ -194,6 +204,14 @@ def run(
             close(s, days[-1], last_close[s], "end")
         equity[days[-1]] = cash
     return Result(pd.Series(equity, dtype=float), pd.DataFrame(trades), capital)
+
+
+def symbol_history(symbol: str, df: pd.DataFrame, rules: Rules, risk: Risk,
+                   costs: Costs = DEFAULT_COSTS) -> pd.DataFrame:
+    """Every trade the rules take on this symbol alone, over all of `df` (backtest gate input).
+    Callers must only look at trades closed before the day they decide on (track_record does).
+    """
+    return run({symbol: df}, rules, replace(risk, backtest_min_trades=0), 100.0, costs).trades
 
 
 def buy_hold(
@@ -276,14 +294,19 @@ def walk_forward(
         s = stats(res)["sharpe"]
         return -math.inf if math.isnan(s) else s
 
+    # The gate's per-symbol backtests depend only on the (truncated) bars and rules: once each.
+    hist = {v: {s: symbol_history(s, df, r, risk, costs) for s, df in bars.items()}
+            for v, r in candidates.items()} if risk.backtest_min_trades else {}
     eq_parts, trade_parts, folds, equity = [], [], [], capital
     while t + train + test <= cutoff:
         test_start, test_end = t + train, t + train + test
         version = next(iter(candidates)) if len(candidates) == 1 else max(
             candidates,
-            key=lambda v: score(run(bars, candidates[v], risk, capital, costs, t, test_start)),
+            key=lambda v: score(run(bars, candidates[v], risk, capital, costs, t, test_start,
+                                    hist.get(v))),
         )
-        res = run(bars, candidates[version], risk, equity, costs, test_start, test_end)
+        res = run(bars, candidates[version], risk, equity, costs, test_start, test_end,
+                  hist.get(version))
         folds.append(Fold(t, test_start, test_end, version, stats(res)))
         eq_parts.append(res.equity)
         trade_parts.append(res.trades)

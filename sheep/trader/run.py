@@ -10,8 +10,10 @@
   catches up a missed one), then enter: re-scan the previous session's final bars, read
   today's opening price, size each entry at it (so the stop risks exactly
   risk_per_trade_pct even after a gap) and pass it through the risk
-  gate (sheep/trader/risk.py). Each entry is a bracket: market buy + OCO stop/target sells,
-  filled at today's open. This is what the backtester does, so the two agree.
+  gate (sheep/trader/risk.py), then, last, the backtest gate: the symbol's own backtest of that
+  setup, trades closed before today, must show a positive average R. Each entry is a
+  bracket: market buy + OCO stop/target sells, filled at today's open. This is what
+  the backtester does, so the two agree.
 
 Every entry order carries its intent (stop, target, rule version, signal reasoning), and every
 trade stores it, so the Reviewer can judge process. Re-running either run is a no-op.
@@ -29,7 +31,7 @@ import pandas as pd
 import psycopg
 from psycopg.types.json import Jsonb
 
-from sheep.backtest.engine import DEFAULT_COSTS, Costs
+from sheep.backtest.engine import DEFAULT_COSTS, Costs, symbol_history
 from sheep.broker.paper import PaperBroker
 from sheep.common.config import Risk, instrument
 from sheep.trader.data import (
@@ -43,7 +45,7 @@ from sheep.trader.data import (
     prev_session,
     today_open,
 )
-from sheep.trader.risk import check_entry
+from sheep.trader.risk import check_entry, track_record
 from sheep.trader.strategy import Rules, scan, signals, trail_stop
 
 _EXIT_REASON = {"stop": "stop", "limit": "target"}
@@ -298,6 +300,14 @@ def _enter(conn, broker: PaperBroker, p, rules: Rules, risk: Risk, bars, watch, 
         if why:
             log.append(f"BLOCK {c.symbol} {c.setup}: " + "; ".join(why))
             continue
+        record = None
+        if risk.backtest_min_trades:  # final check: the same backtest the backtester gates on
+            block, record = track_record(
+                symbol_history(c.symbol, bars[c.symbol], rules, risk, costs), c.setup,
+                pd.Timestamp(today), risk.backtest_min_trades)
+            if block:
+                log.append(f"BLOCK {c.symbol} {c.setup}: {block}")
+                continue
         buy = broker.submit(c.symbol, "buy", qty, at=now)
         group = f"bracket-{buy}"
         conn.execute(
@@ -306,6 +316,7 @@ def _enter(conn, broker: PaperBroker, p, rules: Rules, risk: Risk, bars, watch, 
                 "stop": c.stop, "target": c.target, "ref_price": c.ref_price, "open": px,
                 "setup": c.setup, "signal_date": str(c.date.date()),
                 "rule_version": p["strategy_version"], "bracket": group, "signal": c.reasoning,
+                "backtest": record,
             }), buy),
         )
         broker.submit(c.symbol, "sell", qty, "stop", stop_price=c.stop, oco_group=group, at=now)

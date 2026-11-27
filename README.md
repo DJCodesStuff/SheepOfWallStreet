@@ -59,3 +59,11 @@ the stop within `risk_per_trade_pct`, reward:risk of at least `min_reward_risk` 
 position cost within `max_position_pct` of equity (default 100), symbol not in `blocked`, and
 (Trader only) a signal from the latest session's bar, not a stale one. Set the optional keys under
 a profile's `risk:` in `config/profiles.yaml`. Exits are never blocked.
+
+**Backtest gate (final check).** After the risk gate passes, every entry is checked against its
+own backtest: the rule version run on that symbol alone over all its history, and the last
+`backtest_min_trades` (default 20) trades of the same setup that closed before today must
+average a positive R after costs. Fewer than that many, or zero or negative R, blocks the entry
+(`BLOCK ... backtest ...`). The record it passed on is stored on the trade
+(`reasoning_json.backtest`). The backtester applies the same check, so backtests show its effect.
+Set `backtest_min_trades: 0` under a profile's `risk:` to turn it off.

@@ -12,7 +12,8 @@ from sheep.trader.run import run_profile
 from tests.test_backtest import RULES, rising_then_drop
 
 NO_COSTS = Costs(0)
-RISK = Risk(risk_per_trade_pct=1.0, max_open_positions=1, weekly_loss_limit_pct=100.0)
+RISK = Risk(risk_per_trade_pct=1.0, max_open_positions=1, weekly_loss_limit_pct=100.0,
+            backtest_min_trades=0)  # gate tested on its own in test_risk.py
 
 
 def run_days(db, name, bars, days=None):
@@ -50,7 +51,8 @@ TIGHT = replace(RISK, max_open_positions=2, weekly_loss_limit_pct=1.5)  # room f
     (rising_then_drop(), RISK, RULES),
     (gapped(1.01), RISK, RULES),  # entries gap up: sizing at the open must still risk 1%
     (TWO, TIGHT, TWO_RULES),
-], ids=["plain", "gap_up", "weekly_room"])
+    (rising_then_drop(n=80, drop_at=70), replace(RISK, backtest_min_trades=1), RULES),
+], ids=["plain", "gap_up", "weekly_room", "backtest_gate"])
 def test_daily_runs_match_backtest(db, bars, risk, rules):
     setup_profile(db, bars, risk, rules=rules)
     run_days(db, "t", bars)
@@ -64,6 +66,8 @@ def test_daily_runs_match_backtest(db, bars, risk, rules):
         assert t["exit_price"] == pytest.approx(b.exit_price)
         assert t["pnl"] == pytest.approx(b.pnl)
         assert t["reasoning_json"]["rule_version"] == "t"
+        if risk.backtest_min_trades:  # the record the entry passed on is kept for the Reviewer
+            assert t["reasoning_json"]["backtest"]["avg_r"] > 0
     t = trades[0]
     assert t["qty"] * (t["entry_price"] - t["stop"]) == pytest.approx(1.0)  # 1% of $100
 

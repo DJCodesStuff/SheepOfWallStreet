@@ -32,6 +32,9 @@ class Risk:
     min_reward_risk: float = 1.0  # (target - entry) / (entry - stop)
     max_position_pct: float = 100.0  # one stock/ETF position's cost, as % of equity
     blocked: tuple[str, ...] = ()  # never enter these (e.g. ahead of earnings)
+    # Final check on every entry: this symbol's last N backtested trades of the same setup,
+    # all closed before today, must average a positive R after costs. 0 = off (DECISIONS.md).
+    backtest_min_trades: int = 20
 
 
 @dataclass(frozen=True)
@@ -166,4 +169,5 @@ def parse_profile(raw: dict, strategies: dict[str, dict]) -> Profile:
     check(p.risk.max_open_positions >= 1, "max_open_positions must be >= 1")
     check(p.risk.min_reward_risk >= 0, "min_reward_risk must be >= 0")
     check(0 < p.risk.max_position_pct <= 100, "max_position_pct must be in (0, 100]")
+    check(p.risk.backtest_min_trades >= 0, "backtest_min_trades must be >= 0")
     return p

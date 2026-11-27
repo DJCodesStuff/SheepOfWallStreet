@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import math
 
+import pandas as pd
+
 from sheep.common.config import Instrument, Risk
 
 _TOL = 1e-6  # float slack on the loss limit, which sizing hits exactly
@@ -46,3 +48,23 @@ def check_entry(symbol: str, qty: float, fill: float, stop: float, target: float
         why.append(f"position ${cost:.2f} is {cost / equity:.0%} of equity, over the "
                    f"{risk.max_position_pct:g}% cap")
     return why
+
+
+def track_record(trades: pd.DataFrame, setup: str, asof: pd.Timestamp, n: int
+                 ) -> tuple[str | None, dict]:
+    """Backtest gate, the last check before an entry: (reason to block or None, summary).
+
+    `trades`: one symbol's backtest (engine.symbol_history). Only trades of this setup closed
+    before `asof` count, so there is no look-ahead; the last `n` must average a positive R.
+    Positions the backtest force-closed at the end of its data (reason "end") never really
+    closed, so they don't count (the Trader's history ends yesterday; the backtester's doesn't).
+    """
+    past = trades[(trades["setup"] == setup) & (trades["exit_date"] < asof)
+                  & (trades["reason"] != "end")].tail(n) if len(trades) else trades
+    r = float(past["r_multiple"].mean()) if len(past) else float("nan")
+    summary = {"trades": len(past), "need": n, "avg_r": r}
+    if len(past) < n:
+        return f"backtest has {len(past)} past {setup} trades, need {n}", summary
+    if not r > 0:
+        return f"backtest: last {n} {setup} trades averaged {r:+.2f}R", summary
+    return None, summary

@@ -12,7 +12,8 @@ RULES = Rules(
     trend_ma_days=5, momentum_lookback_days=5, top_n=1, rsi_period=5, rsi_entry_below=0,
     breakout_lookback_days=5, atr_period=5, atr_stop_mult=2.0, target_r_multiple=10.0,
 )
-RISK = Risk(risk_per_trade_pct=1.0, max_open_positions=1, weekly_loss_limit_pct=100.0)
+RISK = Risk(risk_per_trade_pct=1.0, max_open_positions=1, weekly_loss_limit_pct=100.0,
+            backtest_min_trades=0)  # gate tested on its own in test_risk.py
 NO_COSTS = Costs(slippage_bps=0)
 
 

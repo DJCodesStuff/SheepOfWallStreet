@@ -1,13 +1,14 @@
 from dataclasses import replace
 from datetime import datetime, time
 
+import pandas as pd
 import pytest
 
 from sheep.backtest.engine import run
 from sheep.common.config import EQUITY, Profile
 from sheep.common.db import sync_profiles, sync_rule_versions
 from sheep.trader.data import NY
-from sheep.trader.risk import check_entry
+from sheep.trader.risk import check_entry, track_record
 from sheep.trader.run import run_profile
 from tests.test_backtest import NO_COSTS, RISK, RULES, rising_then_drop
 
@@ -51,3 +52,27 @@ def test_trader_blocks_stale_signal(db):
                       open_fn=lambda s, now: df.loc[d, "open"], now=now)
     assert any(line.startswith("BLOCK X breakout: stale signal") for line in log), log
     assert db.execute("SELECT count(*) AS n FROM orders").fetchone()["n"] == 0
+
+
+def test_track_record_uses_only_closed_past_trades_of_the_setup():
+    t = pd.DataFrame({
+        "setup": ["breakout", "breakout", "pullback", "breakout", "breakout"],
+        "exit_date": pd.to_datetime(["2026-01-02", "2026-01-05", "2026-01-06", "2026-01-07",
+                                     "2026-01-09"]),
+        "r_multiple": [1.0, -0.5, -9.0, -5.0, 2.0],
+        "reason": ["target", "stop", "stop", "stop", "end"],
+    })
+    at = pd.Timestamp("2026-01-07")  # the -5R trade closes today: not known at the open
+    assert track_record(t, "breakout", at, 2) == (None, {"trades": 2, "need": 2, "avg_r": 0.25})
+    assert "need 3" in track_record(t, "breakout", at, 3)[0]
+    later = pd.Timestamp("2026-01-12")  # the "end" trade was only force-closed by the backtest
+    assert "-2.75R" in track_record(t, "breakout", later, 2)[0]
+    assert "0 past breakout trades" in track_record(pd.DataFrame(), "breakout", at, 1)[0]
+
+
+def test_backtest_gate_needs_history_then_follows_it():
+    bars = rising_then_drop(n=80, drop_at=70)  # +10R, +10R, then a stop
+    off = run(bars, RULES, RISK, 100, NO_COSTS).trades
+    on = run(bars, RULES, replace(RISK, backtest_min_trades=1), 100, NO_COSTS).trades
+    assert len(off) == 3
+    assert list(on["entry_date"]) == list(off["entry_date"][1:])  # first: no history yet

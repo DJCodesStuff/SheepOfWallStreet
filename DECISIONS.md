@@ -108,3 +108,39 @@ Each entry: what was decided, what was rejected, and what it costs.
 - **Live action (2026-11-24):** `python -m sheep.common.db` was run against Neon, inserting
   rule version v1_1 and switching main_paper to it (no open trades or pending orders at the time).
   The next scheduled Trader run is the first on v1_1.
+
+## Every entry must pass its own backtest, as the final check (2026-11-27)
+
+- **Decided (user's call):** After the risk gate, the Trader backtests the profile's rule version
+  on that symbol alone (all available daily history, costs included) and takes the entry only if
+  the last 20 trades of the same setup (breakout or pullback) that closed before today average
+  a positive R. Fewer than 20 such trades blocks too. The backtester applies the same check, so
+  the Trader and backtests still agree (tested, `backtest_gate` case). It is a `Risk` setting,
+  `backtest_min_trades`, on by default at 20 for every profile (existing and new, including
+  live_small and dashboard-created ones); 0 turns it off. The record an entry passed on is
+  stored in `reasoning_json.backtest` for the Reviewer. Positions the backtest force-closes at
+  the end of its data don't count: they never really closed.
+- **Why:** The user asked for a backtest before every position after main_paper and
+  experiment_momentum_fast lost 3.05% and 1.74% on five straight losing trades (2026-11-04 to
+  11-20). Replayed on those five, the gate blocks one: XLV's breakout (last 20 XLV breakouts
+  -0.29R), the worst loss at -$1.60. The other four passed (+0.00R to +0.07R).
+- **Backtest evidence, against it:** Walk-forward (test windows 1997-2024, 5 bps slippage):
+  main_paper (v1_1) 553 -> 311 trades, return +123% -> +73%, Sharpe 0.54 -> 0.48, max drawdown
+  -21% -> -12%. experiment_momentum_fast (v2_candidate) 277 -> 190 trades, +50% -> +28%,
+  Sharpe 0.43 -> 0.33, drawdown -9% -> -10%. N=10 and N=30 were also worse than off (main_paper
+  Sharpe 0.44 and 0.29). The holdout (2024-11 onward) was run once for this: main_paper +0.1%
+  -> -2.5% (48 -> 40 trades), experiment_momentum_fast unchanged (+0.0%, 29 trades). So the gate
+  cuts drawdown on main_paper but lowers return and Sharpe everywhere tested; a symbol's recent
+  record for a setup does not predict its next trade well. Adopted because the user chose it;
+  revisit once the Reviewer has 20+ gated trades per profile.
+- **Rejected:** Gating on the whole profile's walk-forward (would block every trade today:
+  neither version beats SPY buy-and-hold). Counting all past trades instead of the last 20
+  (does not adapt). Recomputing the per-symbol backtest in every walk-forward fold (130 s per
+  run; it is now computed once per run, ~10 s).
+- **Cost:** Fewer trades (~30-45% fewer) and lower historical return and Sharpe, as above.
+  Symbols or setups with under 20 past trades can never be entered. Each candidate entry
+  costs one single-symbol backtest at the open (~1 s). Dashboard backtests now include the gate
+  for every profile.
+- **Live action (2026-11-27):** `python -m sheep.common.db` run against Neon to write
+  `backtest_min_trades: 20` into every profile's config (the only difference between DB and
+  config; checked first). No positions were open.
